@@ -38,6 +38,17 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "56fc3960-dc49-4952-b4a9-33b2556a03c2"
+      }
+    },
+    "owner": "avithegod-team"
   }
 }
