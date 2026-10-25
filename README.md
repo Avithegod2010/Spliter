@@ -6,9 +6,12 @@
 
 [![Platform](https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white)](https://developer.android.com)
 [![Expo SDK](https://img.shields.io/badge/Expo%20SDK-58-8B5CF6?logo=expo&logoColor=white)](https://expo.dev)
+[![Website](https://img.shields.io/badge/website-live-a3e635)](https://avithegod2010.github.io/Spliter/)
 [![Tests](https://img.shields.io/badge/tests-33%2F33-34D399)](#verify-it-yourself)
 [![TypeScript](https://img.shields.io/badge/types-strict-3178C6?logo=typescript&logoColor=white)](#verify-it-yourself)
 [![License](https://img.shields.io/badge/license-MIT-62627A)](LICENSE)
+
+**🌐 [Open the animated website](https://avithegod2010.github.io/Spliter/)**
 
 </div>
 
