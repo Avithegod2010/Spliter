@@ -95,6 +95,19 @@ flowchart LR
 Expo's JS file APIs can't stream byte ranges through Android's Storage Access Framework on SDK 58 — and Spliter refuses shortcuts that load whole files into memory. The `spl-io` module streams in fixed 8 MB buffers, computes SHA-256 *while* copying, checks a cancel flag between every chunk, and cleans up partial parts on failure. That's what makes 10 GB sources, live progress rings, and background-proof splits possible — and why the app needs a development-client build rather than Expo Go.
 </details>
 
+## Screenshots
+
+<div align="center">
+<table>
+  <tr>
+    <td align="center" width="25%"><img src=".github/screenshots/split.png" alt="Split screen" width="220"/><br/><sub><b>Split</b> — pick any file</sub></td>
+    <td align="center" width="25%"><img src=".github/screenshots/rejoin.png" alt="Rejoin screen" width="220"/><br/><sub><b>Rejoin</b> — parts rebuilt</sub></td>
+    <td align="center" width="25%"><img src=".github/screenshots/history.png" alt="History screen" width="220"/><br/><sub><b>History</b> — every job</sub></td>
+    <td align="center" width="25%"><img src=".github/screenshots/settings.png" alt="Settings screen" width="220"/><br/><sub><b>Theme Studio</b> — make it yours</sub></td>
+  </tr>
+</table>
+</div>
+
 ## Verify it yourself
 
 Quality gates are part of the repo, not an afterthought:
@@ -127,8 +140,8 @@ eas build -p android --profile production    # standalone APK
 ## Status
 
 - ✅ v1 complete — all core flows and the approved feature batch shipped
-- 🔜 Production-signed APK
-- 🔜 Screenshots section (arriving with the production build)
+- ✅ Production APK builds via EAS (`eas build -p android --profile production`)
+- 🔜 Play Store listing
 
 ## License
 
