@@ -1,56 +1,135 @@
-# Welcome to your Expo app 👋
+<div align="center">
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+<img src=".github/assets/banner.svg" alt="Spliter — split any file into byte-perfect parts" width="100%"/>
 
-## Get started
+**Split any file into byte-perfect parts. Rejoin them anywhere — on your phone, or on any PC with one shell command.**
 
-1. Install dependencies
+[![Platform](https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white)](https://developer.android.com)
+[![Expo SDK](https://img.shields.io/badge/Expo%20SDK-58-8B5CF6?logo=expo&logoColor=white)](https://expo.dev)
+[![Tests](https://img.shields.io/badge/tests-33%2F33-34D399)](#verify-it-yourself)
+[![TypeScript](https://img.shields.io/badge/types-strict-3178C6?logo=typescript&logoColor=white)](#verify-it-yourself)
+[![License](https://img.shields.io/badge/license-MIT-62627A)](LICENSE)
 
-   ```bash
-   npm install
-   ```
+</div>
 
-2. Start the app
+---
 
-   ```bash
-   npx expo start
-   ```
+## Why
 
-In the output, you'll find options to open the app in a
+Every file-sharing app has a ceiling — and it's always the wrong one. A 6 GB video won't move over WhatsApp. An APK won't email. An ISO won't fit the FAT32 stick you're handing someone. Cloud drives want accounts, uploads, and patience.
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+**Spliter doesn't care what the file is.** It's a byte-level splitter: it cuts *any* file — video, archive, APK, disk image, whatever — into parts sized for where it needs to go, and rejoins them with zero loss. The parts rejoin **inside the app** or on **any Windows / macOS / Linux machine** with a single built-in shell command. No receiver-side software needed.
 
-You can start developing by editing the files inside the **src/app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+## Highlights
 
-## Get a fresh project
+| | |
+|---|---|
+| ✂️ **Universal byte-split** | Any file, any size — split by **part size** (MB/GB keypad + smart presets) or by **number of parts** |
+| 📲 **Smart presets** | One tap: Telegram · WhatsApp · Discord · Gmail · FAT32 USB · Email-safe |
+| 🔀 **In-app rejoin** | Point at a folder; parts are auto-detected by extension, sequence-validated, then rebuilt |
+| 🖥️ **PC Rejoin Kit** | Generates the exact `copy /b` and `cat` command — the receiver needs *nothing* but a terminal |
+| 🛡️ **Integrity Vault** | Optional SHA-256 fingerprint of the source; rebuilt files are hash-verified and badged — a mismatch deletes the output rather than saving a corrupted file |
+| ⚡ **Native streaming engine** | Local Kotlin module, 8 MB streaming buffers over Android SAF — no full-file reads, handles 10 GB+ sources, background-proof |
+| 📜 **Job history** | Every split and rejoin persisted with size, timing and verification status — one-tap re-run, shareable rejoin kit |
+| 🎨 **Theme Studio** | 6 accent palettes, dark/light/auto, glass intensity, animation level (full/reduced/off) — applied instantly app-wide |
 
-When you're ready, run:
+## The PC Rejoin Kit — the part people actually need
 
-```bash
-npm run reset-project
+This is the moment the app exists for: you've split a file, sent the parts (email, chat, sneakernet), and the person on the other end has no app. Spliter hands you the command — you share it with the file:
+
+```bat
+:: Windows
+copy /b "movie.mp4.001" + "movie.mp4.002" + "movie.mp4.003" "movie.mp4"
 ```
 
-This command will move the starter code to the **example** directory and create a blank **src/app** directory where you can start developing.
+```bash
+# macOS / Linux
+cat "movie.mp4.001" "movie.mp4.002" "movie.mp4.003" > "movie.mp4"
+```
 
-### Other setup steps
+`cat` and `copy /b` have shipped with every desktop OS for 30 years. **The parts rejoin byte-for-byte** — and if you split with a fingerprint enabled, the hash inside `movie.mp4.spliter.json` proves it.
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+## How it works
 
-## Learn more
+```
+ pick a file → choose part size (or preset) → native streaming split
+                                                    │
+        ┌───────────────────────────────────────────┘
+        ▼
+ movie.mp4.001 · movie.mp4.002 · movie.mp4.003 · movie.mp4.spliter.json
+        │                                    (SHA-256, sizes, part count)
+        ▼
+ send parts any way you like ──► rejoin in Spliter, or on any PC
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+<details>
+<summary><strong>Architecture</strong></summary>
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+```mermaid
+flowchart LR
+    subgraph JS["JS / TS · Expo SDK 58 · RN 0.88"]
+        UI["Screens: Split · Rejoin · History · Settings"]
+        ENG["job-engine: progress, cancel, foreground resync"]
+        LIB["split-math · manifest · pc-commands · presets"]
+        ST["zustand + AsyncStorage: settings, history"]
+        UI --> ENG --> LIB
+        ST -.-> UI
+    end
+    subgraph Native["spl-io · local Kotlin module"]
+        SPLIT["splitAsync: streamed write + SHA-256"]
+        MERGE["mergeAsync: sequence check + hash verify"]
+        LIST["listSplitParts: grouping + manifests"]
+    end
+    subgraph FS["Android Storage Access Framework"]
+        SAF["content:// documents, no storage permissions"]
+    end
+    JS -- "Expo Modules API: promises + events" --> Native
+    Native --> SAF
+```
 
-## Join the community
+</details>
 
-Join our community of developers creating universal apps.
+<details>
+<summary><strong>Why a local native module?</strong></summary>
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Expo's JS file APIs can't stream byte ranges through Android's Storage Access Framework on SDK 58 — and Spliter refuses shortcuts that load whole files into memory. The `spl-io` module streams in fixed 8 MB buffers, computes SHA-256 *while* copying, checks a cancel flag between every chunk, and cleans up partial parts on failure. That's what makes 10 GB sources, live progress rings, and background-proof splits possible — and why the app needs a development-client build rather than Expo Go.
+</details>
+
+## Verify it yourself
+
+Quality gates are part of the repo, not an afterthought:
+
+| Gate | Status |
+|---|---|
+| Unit tests (split math, manifests, presets, commands, formatting) | ✅ 33/33 |
+| TypeScript `--noEmit` (strict) | ✅ 0 errors |
+| ESLint (expo config, React Compiler rules) | ✅ 0 problems |
+| Native module compile (`:spl-io:assembleDebug`) | ✅ BUILD SUCCESSFUL |
+
+## Build it
+
+```bash
+git clone https://github.com/Avithegod2010/Spliter.git
+cd Spliter
+npm install
+npx expo prebuild -p android     # generates the native project
+```
+
+Run the JS bundle with a dev client on a device, or cut a standalone APK:
+
+```bash
+eas build -p android --profile dev-client    # development client APK
+eas build -p android --profile production    # standalone APK
+```
+
+> **Note:** the Kotlin engine lives in `modules/spl-io/` and links automatically. Expo Go cannot run it — use a dev-client or production build.
+
+## Status
+
+- ✅ v1 complete — all core flows and the approved feature batch shipped
+- 🔜 Production-signed APK
+- 🔜 Screenshots section (arriving with the production build)
+
+## License
+
+[MIT](LICENSE) — © Avithegod2010
