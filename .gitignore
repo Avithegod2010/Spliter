@@ -45,6 +45,7 @@ example
 # local build logs
 npm-install*.log
 gradle*.log
+metro*.log
 .gradle/
 
 # security scanner state
