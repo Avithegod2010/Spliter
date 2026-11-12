@@ -2,7 +2,7 @@
   "expo": {
     "name": "Spliter",
     "slug": "Spliter",
-    "version": "1.0.1",
+    "version": "1.1.0",
     "runtimeVersion": {
       "policy": "appVersion"
     },
@@ -26,8 +26,13 @@
       "versionCode": 4,
       "intentFilters": [
         {
-          "action": ["android.intent.action.VIEW", "android.intent.action.SEND"],
-          "category": ["android.intent.category.DEFAULT"],
+          "action": [
+            "android.intent.action.VIEW",
+            "android.intent.action.SEND"
+          ],
+          "category": [
+            "android.intent.category.DEFAULT"
+          ],
           "data": {
             "mimeType": "*/*"
           }
