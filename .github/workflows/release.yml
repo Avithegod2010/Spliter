@@ -32,3 +32,27 @@ jobs:
         with:
           files: "./Spliter-${{ github.ref_name }}.apk"
           generate_release_notes: true
+
+  aab:
+    name: Build Play Store AAB and attach to release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build store AAB (local EAS build on runner)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: npx eas-cli build -p android --profile store --local --non-interactive --output "./Spliter-${{ github.ref_name }}.aab"
+
+      - name: Attach AAB to the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "./Spliter-${{ github.ref_name }}.aab"
