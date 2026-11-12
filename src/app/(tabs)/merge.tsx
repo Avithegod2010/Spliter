@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from 'react';
+import * as DocumentPicker from 'expo-document-picker';
 import { StorageAccessFramework } from 'expo-file-system/legacy';
 import { StyleSheet, Text, View } from 'react-native';
 import { Screen } from '@/components/Screen';
@@ -15,11 +16,13 @@ import { useJobEngine } from '@/lib/job-engine';
 import { splIo, type SplMergeOptions, type SplMergeResult, type SplPartGroup } from '@/lib/native-io';
 import { formatBytes, formatDuration } from '@/lib/format';
 import { validatePartSequence } from '@/lib/split-math';
+import { stripPartSuffix } from '@/lib/manifest';
 import { useHistory } from '@/state/history';
 import { useSettings } from '@/state/settings';
 
 interface MergeCandidate {
-  dirUri: string;
+  /** Source folder (null when parts were picked by hand). */
+  dirUri: string | null;
   dirName: string;
   group: SplPartGroup;
 }
@@ -77,6 +80,47 @@ export default function MergeScreen() {
     }
   }, []);
 
+  const pickPartsManually = useCallback(async () => {
+    setUiError(null);
+    const res = await DocumentPicker.getDocumentAsync({
+      type: '*/*',
+      multiple: true,
+      copyToCacheDirectory: false,
+    }).catch(() => null);
+    if (!res || res.canceled || !res.assets?.length) return;
+    const assets = [...res.assets].sort((a, b) =>
+      (a.name ?? '').localeCompare(b.name ?? '', undefined, { numeric: true })
+    );
+    const firstName = assets[0].name || assets[0].uri.split('/').pop() || '';
+    const baseName = stripPartSuffix(firstName);
+    if (!baseName) {
+      setUiError('Those files do not look like split parts — expected names like movie.mp4.001, movie.mp4.002.');
+      return;
+    }
+    setScanning(true);
+    try {
+      const partNames = assets.map((a) => a.name || a.uri.split('/').pop() || 'part');
+      const partSizes = await Promise.all(
+        assets.map((a) => splIo.fileInfo(a.uri).then((f) => f.sizeBytes).catch(() => 0))
+      );
+      setCandidate({
+        dirUri: null,
+        dirName: 'selected by hand',
+        group: {
+          baseName,
+          partNames,
+          partSizes,
+          partUris: assets.map((a) => a.uri),
+          manifest: null,
+        },
+      });
+    } catch (e) {
+      setUiError(e instanceof Error ? e.message : 'Could not read the selected parts');
+    } finally {
+      setScanning(false);
+    }
+  }, []);
+
   const startMerge = async (state: RejoinState) => {
     const { candidate: cand, validate } = state;
     setUiError(null);
@@ -96,11 +140,17 @@ export default function MergeScreen() {
         );
         return;
       }
+      let outputDirUri = cand.dirUri;
+      if (!outputDirUri) {
+        const dir = await StorageAccessFramework.requestDirectoryPermissionsAsync().catch(() => null);
+        if (!dir?.granted) return;
+        outputDirUri = dir.directoryUri;
+      }
       const manifest = cand.group.manifest;
       const outputName = manifest?.originalName || cand.group.baseName;
       const res = await engine.start({
         partUris: cand.group.partUris,
-        outputDirUri: cand.dirUri,
+        outputDirUri,
         outputName,
         expectedSizeBytes: manifest?.originalSize ?? -1,
         expectedSha256: validate ? manifest?.sha256 ?? null : null,
@@ -116,7 +166,7 @@ export default function MergeScreen() {
           partSizeBytes: manifest?.partSizeBytes ?? null,
           sha256: res.sha256,
           verified: res.verified,
-          outputDirUri: cand.dirUri,
+          outputDirUri,
           sourceUri: null,
           integrity: validate,
           partUris: cand.group.partUris,
@@ -194,7 +244,7 @@ export default function MergeScreen() {
           <View style={styles.configStack}>
             <View style={styles.titleRow}>
               <Text style={[styles.sectionTitle, { color: colors.text }]}>
-                {g.partUris.length} parts in {candidate.dirName}
+                {g.partUris.length} parts {candidate.dirUri ? `in ${candidate.dirName}` : candidate.dirName}
               </Text>
             </View>
             <Text style={[styles.partsLine, { color: colors.textDim }]}>
@@ -231,7 +281,11 @@ export default function MergeScreen() {
                 loading={preparing}
               />
             )}
-            <AppButton label="Pick a different folder" variant="ghost" onPress={scanFolder} />
+            <AppButton
+              label={candidate.dirUri ? 'Pick a different folder' : 'Select different parts'}
+              variant="ghost"
+              onPress={candidate.dirUri ? scanFolder : pickPartsManually}
+            />
             {banner && <Text style={[styles.error, { color: colors.danger }]}>{banner}</Text>}
           </View>
         </GlassCard>
@@ -244,12 +298,13 @@ export default function MergeScreen() {
           <View style={styles.heroStack}>
             <Text style={[styles.heroLine, { color: colors.text }]}>Rejoin split parts into the original file</Text>
             <Text style={[styles.heroSub, { color: colors.textDim }]}>
-              Pick the folder that holds the parts — Spliter detects them, validates the sequence, and rebuilds the file.
-              Manifests written by the split are used for fingerprint verification.
+              Scan the folder that holds the parts, or pick them by hand. Spliter sorts them, validates the sequence,
+              and rebuilds the file — manifests unlock fingerprint verification.
             </Text>
           </View>
         </GlassCard>
         <AppButton label="Scan a folder" icon="folder-open" onPress={scanFolder} loading={scanning} />
+        <AppButton label="Select parts manually" icon="documents-outline" variant="ghost" onPress={pickPartsManually} />
         {lastOutputDirUri && !scanning && (
           <Text style={[styles.lastDir, { color: colors.textFaint }]} numberOfLines={1}>
             Last used: {dirNameOf(lastOutputDirUri)}
@@ -258,8 +313,8 @@ export default function MergeScreen() {
         {banner && <Text style={[styles.error, { color: colors.danger, textAlign: 'center' }]}>{banner}</Text>}
         <EmptyState
           icon="git-merge"
-          title="No folder scanned yet"
-          hint="Parts are found by their .001, .002… extensions. A .spliter.json manifest unlocks fingerprint verification."
+          title="Nothing loaded yet"
+          hint="Parts are found by their .001, .002… extensions — or pick the files yourself. A .spliter.json manifest unlocks fingerprint verification."
         />
       </View>
     );
