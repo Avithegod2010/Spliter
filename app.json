@@ -2,7 +2,13 @@
   "expo": {
     "name": "Spliter",
     "slug": "Spliter",
-    "version": "1.0.0",
+    "version": "1.0.1",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/56fc3960-dc49-4952-b4a9-33b2556a03c2"
+    },
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "spliter",
