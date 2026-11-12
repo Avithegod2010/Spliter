@@ -60,6 +60,8 @@ export default function SplitScreen() {
   const setLastOutputDirUri = useSettings((s) => s.setLastOutputDirUri);
 
   const [file, setFile] = useState<PickedFile | null>(null);
+  const [queue, setQueue] = useState<PickedFile[] | null>(null);
+  const [batch, setBatch] = useState<{ files: PickedFile[]; index: number } | null>(null);
   const [mode, setMode] = useState<SizeMode>('size');
   const [unit, setUnit] = useState<SizeUnit>('GB');
   const [value, setValue] = useState('2');
@@ -84,28 +86,101 @@ export default function SplitScreen() {
     setUiError(null);
     const res = await DocumentPicker.getDocumentAsync({
       type: '*/*',
-      multiple: false,
+      multiple: true,
       copyToCacheDirectory: false,
     }).catch(() => null);
     if (!res || res.canceled || !res.assets?.length) return;
-    const asset = res.assets[0];
-    let sizeBytes = asset.size ?? 0;
-    if (sizeBytes <= 0) {
-      try {
-        sizeBytes = (await splIo.fileInfo(asset.uri)).sizeBytes;
-      } catch {
-        sizeBytes = 0;
+    const checked: PickedFile[] = [];
+    for (const asset of res.assets) {
+      let sizeBytes = asset.size ?? 0;
+      if (sizeBytes <= 0) {
+        try {
+          sizeBytes = (await splIo.fileInfo(asset.uri)).sizeBytes;
+        } catch {
+          sizeBytes = 0;
+        }
       }
+      if (sizeBytes <= 0) continue;
+      checked.push({
+        uri: asset.uri,
+        name: asset.name || asset.uri.split('/').pop() || 'file',
+        sizeBytes,
+      });
     }
-    if (sizeBytes <= 0) {
-      setUiError('That file is empty or unreadable — pick another one.');
+    if (!checked.length) {
+      setUiError('Those files are empty or unreadable — pick other ones.');
       return;
     }
-    setFile({
-      uri: asset.uri,
-      name: asset.name || asset.uri.split('/').pop() || 'file',
-      sizeBytes,
-    });
+    if (checked.length === 1) {
+      setQueue(null);
+      setFile(checked[0]);
+    } else {
+      setFile(null);
+      setQueue(checked);
+    }
+  };
+
+  const startBatch = async () => {
+    if (!queue?.length) return;
+    setUiError(null);
+    setPreparing(true);
+    try {
+      const free = await splIo.freeDiskSpace().catch(() => -1);
+      const needed = queue.reduce((a, f) => a + f.sizeBytes, 0);
+      if (free >= 0 && free < needed + 1024 * 1024) {
+        setUiError(
+          `Not enough free space — this batch needs about ${formatBytes(needed)}, only ${formatBytes(free)} available.`
+        );
+        return;
+      }
+      const dirUri = await pickDirectory();
+      if (!dirUri) return;
+      setLastOutputDirUri(dirUri);
+      setBatch({ files: queue, index: 0 });
+      const files = queue;
+      setQueue(null);
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        setBatch({ files, index: i });
+        const batchPlan = resolvePlan(f.sizeBytes, mode, value, unit);
+        if (!batchPlan.ok) {
+          setUiError(`${f.name}: ${batchPlan.error}`);
+          setBatch(null);
+          return;
+        }
+        const res = await engine.start({
+          sourceUri: f.uri,
+          outputDirUri: dirUri,
+          baseName: f.name,
+          partSizeBytes: batchPlan.partSizeBytes,
+          computeSha256: integrity,
+        });
+        if (!res) {
+          setBatch(null);
+          return;
+        }
+        addJob({
+          id: `h-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+          type: 'split',
+          name: f.name,
+          sizeBytes: res.totalSize,
+          partsCount: res.parts.length,
+          partSizeBytes: batchPlan.partSizeBytes,
+          sha256: res.sha256,
+          verified: !!res.sha256,
+          outputDirUri: dirUri,
+          sourceUri: f.uri,
+          integrity,
+          partUris: null,
+          manifestName: res.manifestName,
+          durationMs: engine.durationMs.current,
+          createdAt: Date.now(),
+        });
+      }
+      setBatch(null);
+    } finally {
+      setPreparing(false);
+    }
   };
 
   const startSplit = async () => {
@@ -158,6 +233,8 @@ export default function SplitScreen() {
   const resetAll = () => {
     engine.reset();
     setFile(null);
+    setQueue(null);
+    setBatch(null);
     setValue('2');
     setMode('size');
     setUnit('GB');
@@ -169,7 +246,24 @@ export default function SplitScreen() {
   const banner = uiError ?? (engine.phase === 'cancelled' ? 'Split cancelled — partial parts were removed.' : engine.error);
 
   let body: React.ReactNode;
-  if (engine.phase === 'running') {
+  if (batch) {
+    const cur = batch.files[batch.index];
+    body = (
+      <View style={styles.centerCol}>
+        <ProgressRing
+          progress={engine.progress.bytesTotal ? engine.progress.bytesDone / engine.progress.bytesTotal : 0}
+          label={`File ${batch.index + 1} of ${batch.files.length}`}
+          bytesDone={engine.progress.bytesDone}
+          bytesTotal={engine.progress.bytesTotal}
+        />
+        <Text style={[styles.runningFile, { color: colors.text }]} numberOfLines={1}>
+          {cur.name}
+        </Text>
+        {engine.phase === 'done' && <Text style={[styles.batchSaved, { color: colors.success }]}>Saved ✓ — next file…</Text>}
+        <AppButton label="Cancel current file" variant="ghost" icon="close-circle-outline" onPress={engine.cancel} />
+      </View>
+    );
+  } else if (engine.phase === 'running') {
     body = (
       <View style={styles.centerCol}>
         <ProgressRing
@@ -218,6 +312,26 @@ export default function SplitScreen() {
         </GlassCard>
         <CopyCommandCard partNames={res.parts.map((p) => p.name)} outputName={file.name} />
         <AppButton label="Split another file" icon="add-circle-outline" onPress={resetAll} />
+      </View>
+    );
+  } else if (queue) {
+    const totalBytes = queue.reduce((a, f) => a + f.sizeBytes, 0);
+    body = (
+      <View style={styles.stack}>
+        <Text style={[styles.batchTitle, { color: colors.text }]}>
+          {queue.length} files · {formatBytes(totalBytes)}
+        </Text>
+        {queue.map((f) => (
+          <FileCard key={f.uri} name={f.name} sizeBytes={f.sizeBytes} compact />
+        ))}
+        <AppButton
+          label={`Split all ${queue.length} files`}
+          icon="layers"
+          onPress={startBatch}
+          loading={preparing}
+        />
+        <AppButton label="Clear list" variant="ghost" onPress={() => setQueue(null)} />
+        {banner && <Text style={[styles.error, { color: colors.danger, textAlign: 'center' }]}>{banner}</Text>}
       </View>
     );
   } else {
@@ -369,6 +483,15 @@ const styles = StyleSheet.create({
   },
   runningFile: {
     fontSize: 13,
+  },
+  batchSaved: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  batchTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
   burstWrap: {
     alignItems: 'center',

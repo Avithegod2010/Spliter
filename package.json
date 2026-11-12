@@ -59,7 +59,8 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "test": "jest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:local": "scripts\\build-local.cmd"
   },
   "private": true
 }
