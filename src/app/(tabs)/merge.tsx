@@ -1,7 +1,8 @@
 import React, { useCallback, useState } from 'react';
 import * as DocumentPicker from 'expo-document-picker';
-import { StorageAccessFramework } from 'expo-file-system/legacy';
-import { StyleSheet, Text, View } from 'react-native';
+import { StorageAccessFramework, readAsStringAsync, writeAsStringAsync, EncodingType } from 'expo-file-system/legacy';
+import { Alert, Share, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/components/Screen';
 import { GlassCard } from '@/components/GlassCard';
 import { AppButton } from '@/components/AppButton';
@@ -16,7 +17,8 @@ import { useJobEngine } from '@/lib/job-engine';
 import { splIo, type SplMergeOptions, type SplMergeResult, type SplPartGroup } from '@/lib/native-io';
 import { formatBytes, formatDuration } from '@/lib/format';
 import { validatePartSequence } from '@/lib/split-math';
-import { stripPartSuffix } from '@/lib/manifest';
+import { stripPartSuffix, buildManifest, manifestName as manifestFileName, isManifest } from '@/lib/manifest';
+import { buildRejoinKit } from '@/lib/pc-commands';
 import { useHistory } from '@/state/history';
 import { useSettings } from '@/state/settings';
 
@@ -39,7 +41,7 @@ function dirNameOf(uri: string): string {
 }
 
 export default function MergeScreen() {
-  const { colors } = useTheme();
+  const { colors, accent } = useTheme();
   const addJob = useHistory((s) => s.addJob);
   const lastOutputDirUri = useSettings((s) => s.lastOutputDirUri);
 
@@ -48,6 +50,122 @@ export default function MergeScreen() {
   const [uiError, setUiError] = useState<string | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [duration, setDuration] = useState(0);
+  const [partsOpen, setPartsOpen] = useState(false);
+
+  const movePart = useCallback((index: number, dir: -1 | 1) => {
+    setCandidate((prev) => {
+      if (!prev) return prev;
+      const to = index + dir;
+      if (to < 0 || to >= prev.group.partUris.length) return prev;
+      const swap = <T,>(arr: T[]): T[] => {
+        const copy = [...arr];
+        [copy[index], copy[to]] = [copy[to], copy[index]];
+        return copy;
+      };
+      return { ...prev, group: { ...prev.group, partNames: swap(prev.group.partNames), partSizes: swap(prev.group.partSizes), partUris: swap(prev.group.partUris) } };
+    });
+  }, []);
+
+  const verifyOnly = useCallback(async () => {
+    if (!candidate) return;
+    const sizes = await Promise.all(
+      candidate.group.partUris.map((uri) => splIo.fileInfo(uri).then((f) => f.sizeBytes).catch(() => 0))
+    );
+    const problem = validatePartSequence(
+      sizes,
+      candidate.group.manifest?.originalSize ?? 0,
+      candidate.group.manifest?.partSizeBytes ?? 0
+    );
+    if (problem) {
+      Alert.alert('Verification failed', problem);
+      return;
+    }
+    const sha = candidate.group.manifest?.sha256;
+    Alert.alert(
+      'Parts verified',
+      [
+        `All ${sizes.length} parts present and in order.`,
+        `Total ${formatBytes(sizes.reduce((a, b) => a + b, 0))}.`,
+        sha
+          ? 'The manifest carries a SHA-256 fingerprint — rejoin with verification to confirm the rebuilt file.'
+          : 'No manifest fingerprint available — rejoin to produce the file.',
+      ].join('\n')
+    );
+  }, [candidate]);
+
+  const exportManifest = useCallback(async () => {
+    if (!candidate?.dirUri) return;
+    try {
+      const sizes = await Promise.all(
+        candidate.group.partUris.map((uri) => splIo.fileInfo(uri).then((f) => f.sizeBytes).catch(() => 0))
+      );
+      const m = buildManifest({
+        originalName: candidate.group.baseName,
+        originalSize: sizes.reduce((a, b) => a + b, 0),
+        partCount: candidate.group.partUris.length,
+        partSizeBytes: candidate.group.manifest?.partSizeBytes ?? sizes[0] ?? 0,
+      });
+      const fileUri = await StorageAccessFramework.createFileAsync(
+        candidate.dirUri,
+        manifestFileName(candidate.group.baseName),
+        'application/json'
+      );
+      await writeAsStringAsync(fileUri, JSON.stringify(m, null, 2), { encoding: EncodingType.UTF8 });
+      Alert.alert('Manifest saved', manifestFileName(candidate.group.baseName) + ' written next to the parts.');
+    } catch (e) {
+      Alert.alert('Export failed', e instanceof Error ? e.message : 'Could not write the manifest.');
+    }
+  }, [candidate]);
+
+  const importManifest = useCallback(async () => {
+    if (!candidate) return;
+    const res = await DocumentPicker.getDocumentAsync({
+      type: 'application/json',
+      multiple: false,
+      copyToCacheDirectory: true,
+    }).catch(() => null);
+    if (!res || res.canceled || !res.assets?.length) return;
+    try {
+      const text = await readAsStringAsync(res.assets[0].uri, { encoding: EncodingType.UTF8 });
+      const parsed = JSON.parse(text);
+      if (!isManifest(parsed)) {
+        Alert.alert('Not a Spliter manifest', 'That JSON file is not a Spliter manifest.');
+        return;
+      }
+      if (parsed.originalName && parsed.originalName !== candidate.group.baseName) {
+        Alert.alert(
+          'Manifest mismatch',
+          `This manifest belongs to "${parsed.originalName}", but the loaded parts are "${candidate.group.baseName}".`
+        );
+        return;
+      }
+      setCandidate({
+        ...candidate,
+        group: {
+          ...candidate.group,
+          manifest: {
+            originalName: parsed.originalName,
+            originalSize: parsed.originalSize,
+            partCount: parsed.partCount,
+            partSizeBytes: parsed.partSizeBytes,
+            sha256: parsed.sha256 ?? null,
+          },
+        },
+      });
+      Alert.alert('Manifest imported', 'Fingerprint verification is now available for these parts.');
+    } catch {
+      Alert.alert('Import failed', 'Could not read that file as JSON.');
+    }
+  }, [candidate]);
+
+  const shareKit = useCallback(() => {
+    if (!candidate) return;
+    const outputName = candidate.group.manifest?.originalName || candidate.group.baseName;
+    const kit = buildRejoinKit(candidate.group.partNames, outputName);
+    Share.share({
+      message: `Rejoin "${outputName}" (${formatBytes(candidate.group.partSizes.reduce((a, b) => a + b, 0))}, ${candidate.group.partNames.length} parts) on any PC:\n\nWindows:\n${kit.windows}\n\nmacOS / Linux:\n${kit.unix}\n\n${kit.note}`,
+    }).catch(() => {});
+  }, [candidate]);
 
   const engine = useJobEngine<Omit<SplMergeOptions, 'jobId'>, SplMergeResult>((args, jobId) =>
     splIo.merge({ ...args, jobId })
@@ -247,13 +365,40 @@ export default function MergeScreen() {
                 {g.partUris.length} parts {candidate.dirUri ? `in ${candidate.dirName}` : candidate.dirName}
               </Text>
             </View>
-            <Text style={[styles.partsLine, { color: colors.textDim }]}>
-              {g.partNames
-                .slice(0, 4)
-                .map((n) => n.split('.').slice(-1)[0])
-                .join(' + ')}
-              {g.partNames.length > 4 ? ` + ${g.partNames.length - 4} more` : ''}
-            </Text>
+            <Pressable onPress={() => setPartsOpen((v) => !v)} accessibilityRole="button" accessibilityLabel={partsOpen ? 'Hide all parts' : 'Show all parts'}>
+              <Text style={[styles.partsToggle, { color: accent.accentSoft }]}>
+                {partsOpen ? 'Hide all parts' : `Show all parts (${g.partNames.length})`}
+              </Text>
+            </Pressable>
+            {partsOpen && (
+              <View style={styles.partsList}>
+                {g.partNames.map((name, idx) => (
+                  <View key={`${name}-${idx}`} style={styles.partRow}>
+                    <Text style={[styles.partRowName, { color: colors.text }]} numberOfLines={1}>
+                      {idx + 1}. {name}
+                    </Text>
+                    <Pressable
+                      onPress={() => movePart(idx, -1)}
+                      disabled={idx === 0}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Move ${name} up`}
+                      style={[styles.partMove, idx === 0 && { opacity: 0.3 }]}
+                    >
+                      <Ionicons name="chevron-up" size={16} color={colors.textDim} />
+                    </Pressable>
+                    <Pressable
+                      onPress={() => movePart(idx, 1)}
+                      disabled={idx === g.partNames.length - 1}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Move ${name} down`}
+                      style={[styles.partMove, idx === g.partNames.length - 1 && { opacity: 0.3 }]}
+                    >
+                      <Ionicons name="chevron-down" size={16} color={colors.textDim} />
+                    </Pressable>
+                  </View>
+                ))}
+              </View>
+            )}
             {manifest && (
               <View style={styles.manifestBox}>
                 <Text style={[styles.manifestItem, { color: colors.text }]}>
@@ -286,6 +431,23 @@ export default function MergeScreen() {
               variant="ghost"
               onPress={candidate.dirUri ? scanFolder : pickPartsManually}
             />
+            <AppButton label="Verify parts only" variant="ghost" icon="checkmark-circle-outline" onPress={verifyOnly} />
+            <View style={styles.utilRow}>
+              {candidate.dirUri && (
+                <Pressable onPress={exportManifest} accessibilityRole="button" accessibilityLabel="Export manifest" style={[styles.utilBtn, { borderColor: colors.surfaceBorder }]}>
+                  <Ionicons name="save-outline" size={16} color={accent.accentSoft} />
+                  <Text style={[styles.utilText, { color: colors.textDim }]}>Export manifest</Text>
+                </Pressable>
+              )}
+              <Pressable onPress={importManifest} accessibilityRole="button" accessibilityLabel="Import manifest" style={[styles.utilBtn, { borderColor: colors.surfaceBorder }]}>
+                <Ionicons name="document-text-outline" size={16} color={accent.accentSoft} />
+                <Text style={[styles.utilText, { color: colors.textDim }]}>Import manifest</Text>
+              </Pressable>
+              <Pressable onPress={shareKit} accessibilityRole="button" accessibilityLabel="Share rejoin kit" style={[styles.utilBtn, { borderColor: colors.surfaceBorder }]}>
+                <Ionicons name="share-outline" size={16} color={accent.accentSoft} />
+                <Text style={[styles.utilText, { color: colors.textDim }]}>Share kit</Text>
+              </Pressable>
+            </View>
             {banner && <Text style={[styles.error, { color: colors.danger }]}>{banner}</Text>}
           </View>
         </GlassCard>
@@ -411,5 +573,49 @@ const styles = StyleSheet.create({
   },
   lastDir: {
     fontSize: 12,
+  },
+  partsToggle: {
+    fontSize: 12.5,
+    fontWeight: '700',
+  },
+  partsList: {
+    gap: 2,
+  },
+  partRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 4,
+  },
+  partRowName: {
+    flex: 1,
+    fontSize: 12.5,
+    fontFamily: 'monospace',
+  },
+  partMove: {
+    width: 30,
+    height: 30,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(128,128,160,0.10)',
+  },
+  utilRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  utilBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  utilText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
 });
