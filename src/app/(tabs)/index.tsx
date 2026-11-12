@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import * as DocumentPicker from 'expo-document-picker';
+import { Linking } from 'react-native';
 import { StorageAccessFramework } from 'expo-file-system/legacy';
 import { Switch, StyleSheet, Text, View } from 'react-native';
 import { Screen } from '@/components/Screen';
@@ -73,6 +74,27 @@ export default function SplitScreen() {
   const engine = useJobEngine<Omit<SplSplitOptions, 'jobId'>, SplSplitResult>((args, jobId) =>
     splIo.split({ ...args, jobId })
   );
+
+  // Handle files sent from other apps (ACTION_VIEW / ACTION_SEND with a content:// URI).
+  const acceptIncomingUri = useCallback(async (url: string | null | undefined) => {
+    if (!url || !url.startsWith('content://')) return;
+    try {
+      const info = await splIo.fileInfo(url);
+      if (info.sizeBytes <= 0) return;
+      setQueue(null);
+      setBatch(null);
+      setUiError(null);
+      setFile({ uri: url, name: info.name, sizeBytes: info.sizeBytes });
+    } catch {
+      // Unreadable intent payload — ignore; the user can pick a file manually.
+    }
+  }, []);
+
+  useEffect(() => {
+    Linking.getInitialURL().then(acceptIncomingUri);
+    const sub = Linking.addEventListener('url', (e) => acceptIncomingUri(e.url));
+    return () => sub.remove();
+  }, [acceptIncomingUri]);
 
   const plan = useMemo<SplitPlan | null>(
     () => (file ? resolvePlan(file.sizeBytes, mode, value, unit) : null),

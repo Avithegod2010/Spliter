@@ -23,7 +23,16 @@
         "foregroundImage": "./assets/images/android-icon-foreground.png"
       },
       "predictiveBackGestureEnabled": false,
-      "versionCode": 3
+      "versionCode": 4,
+      "intentFilters": [
+        {
+          "action": ["android.intent.action.VIEW", "android.intent.action.SEND"],
+          "category": ["android.intent.category.DEFAULT"],
+          "data": {
+            "mimeType": "*/*"
+          }
+        }
+      ]
     },
     "web": {
       "output": "server",
