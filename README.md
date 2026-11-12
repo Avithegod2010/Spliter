@@ -30,7 +30,7 @@ Every file-sharing app has a ceiling — and it's always the wrong one. A 6 GB v
 |---|---|
 | ✂️ **Universal byte-split** | Any file, any size — split by **part size** (MB/GB keypad + smart presets) or by **number of parts** |
 | 📲 **Smart presets** | One tap: Telegram · WhatsApp · Discord · Gmail · FAT32 USB · Email-safe |
-| 🔀 **In-app rejoin** | Point at a folder; parts are auto-detected by extension, sequence-validated, then rebuilt |
+| 🔀 **In-app rejoin** | Scan a folder — parts are auto-detected and sequence-validated — or pick the part files by hand |
 | 🖥️ **PC Rejoin Kit** | Generates the exact `copy /b` and `cat` command — the receiver needs *nothing* but a terminal |
 | 🛡️ **Integrity Vault** | Optional SHA-256 fingerprint of the source; rebuilt files are hash-verified and badged — a mismatch deletes the output rather than saving a corrupted file |
 | ⚡ **Native streaming engine** | Local Kotlin module, 8 MB streaming buffers over Android SAF — no full-file reads, handles 10 GB+ sources, background-proof |
@@ -143,8 +143,8 @@ eas build -p android --profile production    # standalone APK
 
 ## Status
 
-- ✅ v1 complete — all core flows and the approved feature batch shipped
-- ✅ Production APK builds via EAS (`eas build -p android --profile production`)
+- ✅ v1.0.1 — manual multi-select rejoin, EAS Update wired, CI on every push
+- ✅ Production APK + Play Store AAB built per release tag by GitHub Actions
 - 🔜 Play Store listing
 
 ## License
