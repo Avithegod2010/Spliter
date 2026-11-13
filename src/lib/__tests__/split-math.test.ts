@@ -1,6 +1,7 @@
 import {
   computeParts,
   computePartsForCount,
+  computeResumePoint,
   partSizeForCount,
   previewPartCount,
   validatePartSequence,
@@ -92,5 +93,44 @@ describe('validatePartSequence', () => {
 describe('constants', () => {
   it('minimum part size is 1 KB', () => {
     expect(MIN_PART_SIZE).toBe(1024);
+  });
+});
+
+describe('computeResumePoint', () => {
+  it('starts fresh when nothing was written', () => {
+    expect(computeResumePoint(0, MB)).toEqual({ partIndex: 1, byteOffset: 0 });
+  });
+
+  it('skips completed parts and resumes inside the partial one', () => {
+    expect(computeResumePoint(2 * MB + 512 * KB, MB)).toEqual({ partIndex: 3, byteOffset: 512 * KB });
+    expect(computeResumePoint(1, MB)).toEqual({ partIndex: 1, byteOffset: 1 });
+    expect(computeResumePoint(MB - 1, MB)).toEqual({ partIndex: 1, byteOffset: MB - 1 });
+  });
+
+  it('moves to a fresh part when the last write completed a part exactly', () => {
+    expect(computeResumePoint(2 * MB, MB)).toEqual({ partIndex: 3, byteOffset: 0 });
+    expect(computeResumePoint(MB, MB)).toEqual({ partIndex: 2, byteOffset: 0 });
+  });
+
+  it('resuming at any cut point stays consistent with the uninterrupted plan', () => {
+    const total = 10 * MB + 123;
+    const size = 3 * MB;
+    const plan = computeParts(total, size);
+    const cutPoints = [0, 1, size - 1, size, size + 1, 2 * size, 3 * size + 17, total - size, total - 1];
+    for (const x of cutPoints) {
+      const { partIndex, byteOffset } = computeResumePoint(x, size);
+      const written = (partIndex - 1) * size + byteOffset;
+      expect(written).toBe(x);
+      const rest = plan.slice(partIndex - 1);
+      expect(rest[0].sizeBytes).toBeGreaterThanOrEqual(byteOffset);
+      const remaining = rest[0].sizeBytes - byteOffset + rest.slice(1).reduce((a, p) => a + p.sizeBytes, 0);
+      expect(remaining).toBe(total - x);
+    }
+  });
+
+  it('rejects invalid positions and part sizes', () => {
+    expect(() => computeResumePoint(-1, MB)).toThrow();
+    expect(() => computeResumePoint(1.5, MB)).toThrow();
+    expect(() => computeResumePoint(MB, 512)).toThrow(/1 KB/i);
   });
 });

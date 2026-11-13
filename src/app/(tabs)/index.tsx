@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import * as DocumentPicker from 'expo-document-picker';
-import { Linking } from 'react-native';
 import { StorageAccessFramework } from 'expo-file-system/legacy';
-import { Switch, StyleSheet, Text, View } from 'react-native';
+import { Linking, Switch, StyleSheet, Text, View } from 'react-native';
 import { Screen } from '@/components/Screen';
 import { GlassCard } from '@/components/GlassCard';
 import { AppButton } from '@/components/AppButton';
@@ -15,10 +14,10 @@ import { CopyCommandCard } from '@/components/CopyCommandCard';
 import { useTheme } from '@/theme/ThemeProvider';
 import { spacing } from '@/theme/tokens';
 import { useJobEngine } from '@/lib/job-engine';
-import { splIo, type SplSplitOptions, type SplSplitResult } from '@/lib/native-io';
+import { splIo, type SplResumeOptions, type SplSplitOptions, type SplSplitResult } from '@/lib/native-io';
 import { parseSizeInput, formatBytes, formatDuration } from '@/lib/format';
 import { findPreset } from '@/lib/presets';
-import { partSizeForCount, previewPartCount, MAX_PARTS } from '@/lib/split-math';
+import { computeResumePoint, partSizeForCount, previewPartCount, MAX_PARTS } from '@/lib/split-math';
 import { useHistory } from '@/state/history';
 import { useSettings } from '@/state/settings';
 
@@ -26,6 +25,19 @@ interface PickedFile {
   uri: string;
   name: string;
   sizeBytes: number;
+}
+
+type SplitEngineArgs = Omit<SplSplitOptions, 'jobId'> | Omit<SplResumeOptions, 'jobId'>;
+
+/** A split that ended in cancel/error — its parts stay on disk, ready to resume. */
+interface FailedSplit {
+  sourceUri: string;
+  outputDirUri: string;
+  baseName: string;
+  partSizeBytes: number;
+  computeSha256: boolean;
+  bytesDone: number;
+  bytesTotal: number;
 }
 
 type SplitPlan = { ok: true; partSizeBytes: number; partsCount: number } | { ok: false; error: string };
@@ -70,9 +82,10 @@ export default function SplitScreen() {
   const [integrity, setIntegrity] = useState(integrityDefault);
   const [uiError, setUiError] = useState<string | null>(null);
   const [preparing, setPreparing] = useState(false);
+  const [failedSplit, setFailedSplit] = useState<FailedSplit | null>(null);
 
-  const engine = useJobEngine<Omit<SplSplitOptions, 'jobId'>, SplSplitResult>((args, jobId) =>
-    splIo.split({ ...args, jobId })
+  const engine = useJobEngine<SplitEngineArgs, SplSplitResult>((args, jobId) =>
+    'resumeFromPartIndex' in args ? splIo.resume({ ...args, jobId }) : splIo.split({ ...args, jobId })
   );
 
   // Handle files sent from other apps (ACTION_VIEW / ACTION_SEND with a content:// URI).
@@ -84,6 +97,7 @@ export default function SplitScreen() {
       setQueue(null);
       setBatch(null);
       setUiError(null);
+      setFailedSplit(null);
       setFile({ uri: url, name: info.name, sizeBytes: info.sizeBytes });
     } catch {
       // Unreadable intent payload — ignore; the user can pick a file manually.
@@ -106,6 +120,7 @@ export default function SplitScreen() {
 
   const pickFile = async () => {
     setUiError(null);
+    setFailedSplit(null);
     const res = await DocumentPicker.getDocumentAsync({
       type: '*/*',
       multiple: true,
@@ -178,9 +193,19 @@ export default function SplitScreen() {
           computeSha256: integrity,
         });
         if (!res) {
+          setFailedSplit({
+            sourceUri: f.uri,
+            outputDirUri: dirUri,
+            baseName: f.name,
+            partSizeBytes: batchPlan.partSizeBytes,
+            computeSha256: integrity,
+            bytesDone: engine.progressRef.current.bytesDone,
+            bytesTotal: engine.progressRef.current.bytesTotal || f.sizeBytes,
+          });
           setBatch(null);
           return;
         }
+        setFailedSplit(null);
         addJob({
           id: `h-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
           type: 'split',
@@ -229,6 +254,7 @@ export default function SplitScreen() {
         computeSha256: integrity,
       });
       if (res) {
+        setFailedSplit(null);
         addJob({
           id: `h-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
           type: 'split',
@@ -245,6 +271,76 @@ export default function SplitScreen() {
           manifestName: res.manifestName,
           durationMs: engine.durationMs.current,
           createdAt: Date.now(),
+        });
+      } else {
+        setFailedSplit({
+          sourceUri: file.uri,
+          outputDirUri: dirUri,
+          baseName: file.name,
+          partSizeBytes,
+          computeSha256: integrity,
+          bytesDone: engine.progressRef.current.bytesDone,
+          bytesTotal: engine.progressRef.current.bytesTotal || file.sizeBytes,
+        });
+      }
+    } finally {
+      setPreparing(false);
+    }
+  };
+
+  const resumeSplit = async () => {
+    const failed = failedSplit;
+    if (!failed) return;
+    setUiError(null);
+    setPreparing(true);
+    try {
+      const point = computeResumePoint(failed.bytesDone, failed.partSizeBytes);
+      const remaining = Math.max(failed.bytesTotal - failed.bytesDone, 0);
+      const free = await splIo.freeDiskSpace().catch(() => -1);
+      if (free >= 0 && free < remaining + 1024 * 1024) {
+        setUiError(
+          `Not enough free space — about ${formatBytes(remaining)} still to write, only ${formatBytes(free)} available.`
+        );
+        return;
+      }
+      if (!file) {
+        // Batch remnant: restore the file card so the success view can render.
+        setFile({ uri: failed.sourceUri, name: failed.baseName, sizeBytes: failed.bytesTotal });
+      }
+      const res = await engine.resume({
+        sourceUri: failed.sourceUri,
+        outputDirUri: failed.outputDirUri,
+        baseName: failed.baseName,
+        partSizeBytes: failed.partSizeBytes,
+        computeSha256: failed.computeSha256,
+        resumeFromPartIndex: point.partIndex,
+        resumeFromByteOffset: point.byteOffset,
+      });
+      if (res) {
+        setFailedSplit(null);
+        addJob({
+          id: `h-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+          type: 'split',
+          name: failed.baseName,
+          sizeBytes: res.totalSize,
+          partsCount: res.parts.length,
+          partSizeBytes: failed.partSizeBytes,
+          sha256: res.sha256,
+          verified: !!res.sha256,
+          outputDirUri: failed.outputDirUri,
+          sourceUri: failed.sourceUri,
+          integrity: failed.computeSha256,
+          partUris: null,
+          manifestName: res.manifestName,
+          durationMs: engine.durationMs.current,
+          createdAt: Date.now(),
+        });
+      } else {
+        // Still stuck — remember the newer progress for the next resume attempt.
+        setFailedSplit({
+          ...failed,
+          bytesDone: engine.progressRef.current.bytesDone,
+          bytesTotal: engine.progressRef.current.bytesTotal || failed.bytesTotal,
         });
       }
     } finally {
@@ -263,9 +359,21 @@ export default function SplitScreen() {
     setPresetId(null);
     setIntegrity(integrityDefault);
     setUiError(null);
+    setFailedSplit(null);
   };
 
-  const banner = uiError ?? (engine.phase === 'cancelled' ? 'Split cancelled — partial parts were removed.' : engine.error);
+  const banner = uiError ?? (engine.phase === 'cancelled' ? 'Split cancelled — completed parts were kept. You can resume.' : engine.error);
+
+  const resumePoint = failedSplit ? computeResumePoint(failedSplit.bytesDone, failedSplit.partSizeBytes) : null;
+  const showResume = !!failedSplit && (engine.phase === 'cancelled' || engine.phase === 'error');
+  const resumeButton = showResume && resumePoint ? (
+    <AppButton
+      label={`Resume split from part ${resumePoint.partIndex}`}
+      icon="play-circle-outline"
+      onPress={resumeSplit}
+      loading={preparing}
+    />
+  ) : null;
 
   let body: React.ReactNode;
   if (batch) {
@@ -285,7 +393,7 @@ export default function SplitScreen() {
         <AppButton label="Cancel current file" variant="ghost" icon="close-circle-outline" onPress={engine.cancel} />
       </View>
     );
-  } else if (engine.phase === 'running') {
+  } else if (engine.phase === 'running' || engine.phase === 'resumed') {
     body = (
       <View style={styles.centerCol}>
         <ProgressRing
@@ -353,6 +461,7 @@ export default function SplitScreen() {
           loading={preparing}
         />
         <AppButton label="Clear list" variant="ghost" onPress={() => setQueue(null)} />
+        {resumeButton}
         {banner && <Text style={[styles.error, { color: colors.danger, textAlign: 'center' }]}>{banner}</Text>}
       </View>
     );
@@ -419,6 +528,7 @@ export default function SplitScreen() {
           disabled={!ready}
           loading={preparing}
         />
+        {resumeButton}
         <AppButton label="Choose a different file" variant="ghost" onPress={pickFile} />
         {banner && <Text style={[styles.error, { color: colors.danger, textAlign: 'center' }]}>{banner}</Text>}
       </View>
@@ -433,6 +543,7 @@ export default function SplitScreen() {
           </View>
         </GlassCard>
         <AppButton label="Choose a file" icon="document-attach" onPress={pickFile} />
+        {resumeButton}
         {banner && <Text style={[styles.error, { color: colors.danger, textAlign: 'center' }]}>{banner}</Text>}
       </View>
     );

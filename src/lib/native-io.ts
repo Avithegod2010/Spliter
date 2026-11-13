@@ -23,6 +23,19 @@ export interface SplSplitResult {
   manifestName: string;
 }
 
+export interface SplResumeOptions {
+  sourceUri: string;
+  outputDirUri: string;
+  baseName: string;
+  partSizeBytes: number;
+  computeSha256: boolean;
+  /** Parts 1..N-1 are already complete on disk; writing continues here. */
+  resumeFromPartIndex: number;
+  /** Bytes already written into part resumeFromPartIndex. */
+  resumeFromByteOffset: number;
+  jobId: string;
+}
+
 export interface SplMergeOptions {
   partUris: string[];
   outputDirUri: string;
@@ -41,7 +54,7 @@ export interface SplMergeResult {
 
 export interface SplJobEvent {
   jobId: string;
-  phase: 'running' | 'done' | 'cancelled' | 'error';
+  phase: 'running' | 'resumed' | 'done' | 'cancelled' | 'error';
   bytesDone: number;
   bytesTotal: number;
   partIndex: number;
@@ -74,6 +87,7 @@ type SplIOEvents = { onJobEvent: (event: SplJobEvent) => void };
 
 declare class SplIOModule extends NativeModule<SplIOEvents> {
   splitAsync(options: SplSplitOptions): Promise<SplSplitResult>;
+  resumeAsync(options: SplResumeOptions): Promise<SplSplitResult>;
   mergeAsync(options: SplMergeOptions): Promise<SplMergeResult>;
   cancelJob(jobId: string): Promise<boolean>;
   lastJobEvent(jobId: string): Promise<SplJobEvent | null>;
@@ -103,6 +117,9 @@ export const splIo = {
   },
   split(options: SplSplitOptions) {
     return requireModule().splitAsync(options);
+  },
+  resume(options: SplResumeOptions) {
+    return requireModule().resumeAsync(options);
   },
   merge(options: SplMergeOptions) {
     return requireModule().mergeAsync(options);

@@ -67,6 +67,27 @@ export function validatePartSize(partSizeBytes: number): void {
   }
 }
 
+export interface ResumePoint {
+  /** 1-based index of the part the split stopped in. */
+  partIndex: number;
+  /** Bytes already written into that part (0 when it starts fresh). */
+  byteOffset: number;
+}
+
+/**
+ * Where a cancelled/failed split left off, derived from the last reported
+ * byte count: parts 1..partIndex-1 are complete (partSizeBytes each) and
+ * partIndex holds byteOffset bytes. An exact multiple lands on a fresh part.
+ */
+export function computeResumePoint(bytesDone: number, partSizeBytes: number): ResumePoint {
+  if (!Number.isInteger(bytesDone) || bytesDone < 0) throw new Error('Resume position is invalid');
+  validatePartSize(partSizeBytes);
+  return {
+    partIndex: Math.floor(bytesDone / partSizeBytes) + 1,
+    byteOffset: bytesDone % partSizeBytes,
+  };
+}
+
 /** True when every part except the last matches size and total matches. */
 export function validatePartSequence(sizes: number[], expectedTotal?: number, expectedPartSize?: number): string | null {
   if (sizes.length === 0) return 'No parts found';

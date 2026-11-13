@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { splIo, type SplJobEvent } from './native-io';
 
-export type JobPhase = 'idle' | 'running' | 'done' | 'cancelled' | 'error';
+export type JobPhase = 'idle' | 'running' | 'resumed' | 'done' | 'cancelled' | 'error';
 
 export interface JobProgress {
   bytesDone: number;
@@ -34,65 +34,76 @@ export function useJobEngine<TArgs, TResult>(
   const durationRef = useRef(0);
   const jobIdRef = useRef<string | null>(null);
   const phaseRef = useRef<JobPhase>('idle');
+  const progressRef = useRef<JobProgress>(INITIAL_PROGRESS);
   const onDoneRef = useRef(options?.onDone);
   useEffect(() => {
     onDoneRef.current = options?.onDone;
   });
 
-  const setPhaseBoth = (p: JobPhase) => {
+  const setPhaseBoth = useCallback((p: JobPhase) => {
     phaseRef.current = p;
     setPhase(p);
-  };
+  }, []);
 
-  useEffect(() => {
-    const sub = splIo.addJobListener((event: SplJobEvent) => {
-      if (event.jobId !== jobIdRef.current) return;
-      if (event.phase === 'running') {
-        setProgress({
+  const setProgressBoth = useCallback((p: JobProgress) => {
+    progressRef.current = p;
+    setProgress(p);
+  }, []);
+
+  const applyProgressEvent = useCallback(
+    (event: SplJobEvent) => {
+      if (event.phase === 'running' && phaseRef.current === 'resumed') {
+        // First progress event after a resume — switch to the running view.
+        setPhaseBoth('running');
+      }
+      if (event.phase === 'running' || event.phase === 'resumed') {
+        setProgressBoth({
           bytesDone: event.bytesDone,
           bytesTotal: event.bytesTotal,
           partIndex: event.partIndex,
           partsTotal: event.partsTotal,
         });
       }
+    },
+    [setPhaseBoth, setProgressBoth]
+  );
+
+  useEffect(() => {
+    const sub = splIo.addJobListener((event: SplJobEvent) => {
+      if (event.jobId !== jobIdRef.current) return;
+      applyProgressEvent(event);
     });
     return () => sub.remove();
-  }, []);
+  }, [applyProgressEvent]);
 
   useEffect(() => {
     const appState = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
       const jobId = jobIdRef.current;
-      if (!jobId || phaseRef.current !== 'running') return;
+      const active = phaseRef.current === 'running' || phaseRef.current === 'resumed';
+      if (!jobId || !active) return;
       // Native kept working while we were in the background — resync.
       splIo
         .lastJobEvent(jobId)
         .then((event) => {
           if (!event || event.jobId !== jobIdRef.current) return;
-          if (event.phase === 'running') {
-            setProgress({
-              bytesDone: event.bytesDone,
-              bytesTotal: event.bytesTotal,
-              partIndex: event.partIndex,
-              partsTotal: event.partsTotal,
-            });
-          }
+          applyProgressEvent(event);
         })
         .catch(() => {});
     });
     return () => appState.remove();
-  }, []);
+  }, [applyProgressEvent]);
 
-  const start = async (args: TArgs): Promise<TResult | null> => {
-    if (phaseRef.current === 'running') return null;
+  const runJob = async (args: TArgs, initialPhase: JobPhase): Promise<TResult | null> => {
+    if (phaseRef.current === 'running' || phaseRef.current === 'resumed') return null;
     const jobId = `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     jobIdRef.current = jobId;
     startedAtRef.current = Date.now();
     durationRef.current = 0;
-    setProgress(INITIAL_PROGRESS);
+    setProgressBoth(INITIAL_PROGRESS);
     setError(null);
     setResult(null);
-    setPhaseBoth('running');
+    setPhaseBoth(initialPhase);
     try {
       const res = await run(args, jobId);
       durationRef.current = Date.now() - startedAtRef.current;
@@ -116,6 +127,11 @@ export function useJobEngine<TArgs, TResult>(
     }
   };
 
+  const start = (args: TArgs): Promise<TResult | null> => runJob(args, 'running');
+
+  /** Continue a cancelled/failed split from its last known progress. */
+  const resume = (args: TArgs): Promise<TResult | null> => runJob(args, 'resumed');
+
   const cancel = async () => {
     const jobId = jobIdRef.current;
     if (jobId) await splIo.cancel(jobId).catch(() => {});
@@ -123,11 +139,11 @@ export function useJobEngine<TArgs, TResult>(
 
   const reset = () => {
     setPhaseBoth('idle');
-    setProgress(INITIAL_PROGRESS);
+    setProgressBoth(INITIAL_PROGRESS);
     setError(null);
     setResult(null);
     jobIdRef.current = null;
   };
 
-  return { phase, progress, error, result, durationMs: durationRef, start, cancel, reset };
+  return { phase, progress, error, result, durationMs: durationRef, progressRef, start, resume, cancel, reset };
 }
