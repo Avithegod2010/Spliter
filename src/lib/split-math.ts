@@ -6,6 +6,8 @@ export interface PartPlan {
 export const MIN_PART_SIZE = 1024; // 1 KB — below this, splitting is meaningless
 export const MAX_PARTS = 9999;
 export const MIN_FILE_SIZE = 1; // reject empty files
+export const MIN_SEGMENT_MS = 1000; // 1 s — shortest meaningful media segment
+export const MINUTES_MS = 60_000;
 
 /**
  * Compute the exact byte size of every part so that:
@@ -65,6 +67,25 @@ export function validatePartSize(partSizeBytes: number): void {
   if (!Number.isInteger(partSizeBytes) || partSizeBytes < MIN_PART_SIZE) {
     throw new Error('Part size must be at least 1 KB');
   }
+}
+
+export function validateDurationMs(durationMs: number): void {
+  if (!Number.isInteger(durationMs) || durationMs < MIN_SEGMENT_MS) {
+    throw new Error('Segment length must be a whole number of at least 1 second');
+  }
+}
+
+/** How many ~segmentMs segments a media timeline of totalDurationMs becomes. */
+export function previewPartCountByDuration(totalDurationMs: number, segmentMs: number): number {
+  if (!Number.isFinite(totalDurationMs) || totalDurationMs <= 0) {
+    throw new Error('Could not read the media duration — is this a playable video?');
+  }
+  validateDurationMs(segmentMs);
+  const count = Math.ceil(totalDurationMs / segmentMs);
+  if (count > MAX_PARTS) {
+    throw new Error(`This would create more than ${MAX_PARTS} segments — choose a longer segment length`);
+  }
+  return count;
 }
 
 export interface ResumePoint {

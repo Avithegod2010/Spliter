@@ -2,7 +2,7 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useTheme } from '@/theme/ThemeProvider';
 
-export type SizeMode = 'size' | 'parts';
+export type SizeMode = 'size' | 'parts' | 'duration';
 export type SizeUnit = 'MB' | 'GB';
 
 interface SizeFieldProps {
@@ -53,7 +53,8 @@ export function SizeField({ mode, onModeChange, unit, onUnitChange, value, onVal
         onChange={onModeChange}
         options={[
           { value: 'size', label: 'Part size' },
-          { value: 'parts', label: 'Number of parts' },
+          { value: 'parts', label: 'Parts' },
+          { value: 'duration', label: 'Duration' },
         ]}
       />
       <View style={[styles.inputRow, { borderColor: colors.surfaceBorder, backgroundColor: colors.surface }]}>
@@ -62,9 +63,11 @@ export function SizeField({ mode, onModeChange, unit, onUnitChange, value, onVal
           value={value}
           onChangeText={onValueChange}
           keyboardType="decimal-pad"
-          placeholder={mode === 'size' ? '2' : '5'}
+          placeholder={mode === 'size' ? '2' : mode === 'parts' ? '5' : '5'}
           placeholderTextColor={colors.textFaint}
-          accessibilityLabel={mode === 'size' ? 'Part size value' : 'Number of parts'}
+          accessibilityLabel={
+            mode === 'size' ? 'Part size value' : mode === 'parts' ? 'Number of parts' : 'Segment length in minutes'
+          }
         />
         {mode === 'size' ? (
           <Segmented
@@ -76,7 +79,9 @@ export function SizeField({ mode, onModeChange, unit, onUnitChange, value, onVal
             ]}
           />
         ) : (
-          <Text style={[styles.unitText, { color: accent.accentSoft }]}>parts</Text>
+          <Text style={[styles.unitText, { color: accent.accentSoft }]}>
+            {mode === 'parts' ? 'parts' : 'min'}
+          </Text>
         )}
       </View>
     </View>

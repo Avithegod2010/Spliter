@@ -9,6 +9,7 @@ import { SIZE_PRESETS } from '@/lib/presets';
 interface PresetChipsProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
+  presets?: { id: string; label: string; sublabel: string }[];
 }
 
 function Chip({ id, label, sublabel, selected, onSelect }: {
@@ -54,7 +55,7 @@ function Chip({ id, label, sublabel, selected, onSelect }: {
   );
 }
 
-export function PresetChips({ selectedId, onSelect }: PresetChipsProps) {
+export function PresetChips({ selectedId, onSelect, presets = SIZE_PRESETS }: PresetChipsProps) {
   return (
     <ScrollView
       horizontal
@@ -62,7 +63,7 @@ export function PresetChips({ selectedId, onSelect }: PresetChipsProps) {
       contentContainerStyle={styles.row}
       keyboardShouldPersistTaps="handled"
     >
-      {SIZE_PRESETS.map((p) => (
+      {presets.map((p) => (
         <Chip
           key={p.id}
           id={p.id}

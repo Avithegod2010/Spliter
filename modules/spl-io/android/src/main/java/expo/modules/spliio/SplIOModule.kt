@@ -2,6 +2,11 @@ package expo.modules.spliio
 
 import android.content.ContentValues
 import android.content.Context
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
+import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
@@ -30,6 +35,7 @@ private const val EVENT_PROGRESS_INTERVAL_MS = 120L
 private const val MIME_PART = "application/octet-stream"
 private const val MIME_JSON = "application/json"
 private const val MANIFEST_SUFFIX = ".spliter.json"
+private const val MAX_SEGMENTS = 9999
 private val PART_REGEX = Regex("^(.+)\\.(\\d{3})$")
 
 /** Progress callback shared by every job: (phase, bytesDone, bytesTotal, partIndex, partsTotal, message). */
@@ -174,6 +180,266 @@ class SplIOModule : Module() {
           throw t
         }
         finishSplit(resolver, dirDoc, children, baseName, partSize, totalSize, digest, writer, emit)
+      }
+    }
+
+    AsyncFunction("splitMediaAsync") { options: Map<String, Any?>, promise: Promise ->
+      val jobId = requireString(options, "jobId")
+      runJob(jobId, promise) { cancelFlag, emit ->
+        val sourceUri = Uri.parse(requireString(options, "sourceUri"))
+        val outputDirUri = Uri.parse(requireString(options, "outputDirUri"))
+        val baseName = requireString(options, "baseName")
+        val durationMs = requireLong(options, "durationMs")
+        require(durationMs >= 1000) { "durationMs must be at least 1000" }
+        val segmentUs = durationMs * 1000L
+        if (segmentUs <= 0) throw IllegalArgumentException("durationMs is out of range")
+
+        val resolver = context.contentResolver
+        val (muxerFormat, tempExt) = muxerOutputFormatFor(baseName)
+          ?: throw IOException("Duration split supports MP4, MOV, WebM and 3GP media — use byte split for this file")
+
+        val dirDoc = buildDocumentUri(outputDirUri)
+        val children = listChildren(resolver, outputDirUri)
+        val tempDir = File(context.cacheDir, "spliter-media-$jobId")
+        if (!tempDir.isDirectory && !tempDir.mkdirs()) {
+          throw IOException("Could not prepare the temporary folder for segments")
+        }
+
+        // ---- pre-scan: timeline + keyframe-aligned cut points ----
+        var durationUs = 0L
+        val syncTimesUs = mutableListOf<Long>()
+        val scan = MediaExtractor()
+        try {
+          scan.setDataSource(context, sourceUri, null)
+          val trackCount = scan.trackCount
+          if (trackCount <= 0) throw IOException("No media tracks found — this file cannot be split by duration")
+          var videoTrack = -1
+          for (i in 0 until trackCount) {
+            scan.selectTrack(i)
+            val mime = scan.getTrackFormat(i).getString(MediaFormat.KEY_MIME)
+            if (videoTrack < 0 && mime?.startsWith("video/") == true) videoTrack = i
+          }
+          do {
+            if (cancelFlag.get()) throw OperationCancelledException()
+            val track = scan.sampleTrackIndex
+            if (track >= 0) {
+              val time = scan.sampleTime
+              if (time > durationUs) durationUs = time
+              if (track == videoTrack && (scan.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC) != 0) {
+                syncTimesUs.add(time)
+              }
+            }
+          } while (scan.advance())
+        } finally {
+          runCatching { scan.release() }
+        }
+        if (durationUs <= 0) throw IOException("Could not read the media timeline — is this a playable video or audio file?")
+
+        val boundariesUs = mutableListOf<Long>()
+        if (syncTimesUs.isNotEmpty()) {
+          // Prefer cuts on video keyframes; a GOP longer than the requested
+          // segment simply yields longer segments (never re-encoded).
+          var k = 1L
+          var index = 0
+          while (true) {
+            val target = k * segmentUs
+            if (target >= durationUs) break
+            while (index < syncTimesUs.size && syncTimesUs[index] < target) index++
+            if (index >= syncTimesUs.size) break
+            val boundary = syncTimesUs[index]
+            if (boundariesUs.isNotEmpty() && boundary <= boundariesUs.last()) {
+              k++
+              continue
+            }
+            boundariesUs.add(boundary)
+            k++
+          }
+        } else {
+          var target = segmentUs
+          while (target < durationUs) {
+            boundariesUs.add(target)
+            target += segmentUs
+          }
+        }
+        val plannedParts = boundariesUs.size + 1
+        if (plannedParts > MAX_SEGMENTS) {
+          throw IOException("This segment length would create more than $MAX_SEGMENTS parts — choose a longer one")
+        }
+
+        // ---- write pass: one muxer per segment, copied into the SAF folder ----
+        val extractor = MediaExtractor()
+        val createdDocs = mutableListOf<Uri>()
+        var bytesTotal = querySize(resolver, sourceUri)
+        if (bytesTotal <= 0) bytesTotal = 1
+        var bytesDone = 0L
+        var lastEmit = 0L
+        var segmentIndex = 0
+        var partNumber = 0
+        var samplesInSegment = 0
+        var muxer: MediaMuxer? = null
+        var muxerTracks: IntArray? = null
+        var tempFile: File? = null
+
+        try {
+          extractor.setDataSource(context, sourceUri, null)
+          val trackCount = extractor.trackCount
+          if (trackCount <= 0) throw IOException("No media tracks found — this file cannot be split by duration")
+          val formats = (0 until trackCount).map { extractor.getTrackFormat(it) }
+          var maxInputSize = 256 * 1024
+          for (format in formats) {
+            if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
+              maxInputSize = maxOf(maxInputSize, format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE))
+            }
+          }
+          var rotation = 0
+          val videoFormat = formats.firstOrNull { it.getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true }
+          if (videoFormat != null && videoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
+            rotation = runCatching { videoFormat.getInteger(MediaFormat.KEY_ROTATION) }.getOrDefault(0)
+          }
+          val buffer = java.nio.ByteBuffer.allocateDirect(maxInputSize)
+          val info = MediaCodec.BufferInfo()
+
+          fun startSegment() {
+            val file = File(tempDir, "seg-%04d.%s".format(segmentIndex + 1, tempExt))
+            val m = MediaMuxer(file.absolutePath, muxerFormat)
+            if (rotation != 0) runCatching { m.setOrientationHint(rotation) }
+            val trackMap = IntArray(trackCount)
+            formats.forEachIndexed { i, format -> trackMap[i] = m.addTrack(format) }
+            m.start()
+            muxer = m
+            muxerTracks = trackMap
+            tempFile = file
+            samplesInSegment = 0
+          }
+
+          fun finishSegment() {
+            val m = muxer ?: return
+            val file = tempFile
+            muxer = null
+            muxerTracks = null
+            tempFile = null
+            if (samplesInSegment == 0) {
+              runCatching { m.release() }
+              file?.delete()
+              return
+            }
+            m.stop()
+            m.release()
+            if (file != null) {
+              partNumber += 1
+              val partName = "%s.%03d".format(baseName, partNumber)
+              children[partName]?.let { runCatching { resolver.delete(it, null, null) } }
+              val doc = insertDocument(resolver, dirDoc, partName, guessMime(baseName))
+                ?: throw IOException("Could not create part file $partName in the selected folder")
+              try {
+                resolver.openOutputStream(doc, "w")!!.use { os ->
+                  file.inputStream().use { input -> input.copyTo(os, BUFFER_SIZE) }
+                  os.flush()
+                }
+              } catch (t: Throwable) {
+                runCatching { resolver.delete(doc, null, null) }
+                throw t
+              }
+              createdDocs.add(doc)
+              file.delete()
+            }
+            emit("running", bytesDone, bytesTotal, partNumber.toLong(), plannedParts.toLong(), null)
+          }
+
+          startSegment()
+          do {
+            if (cancelFlag.get()) throw OperationCancelledException()
+            val track = extractor.sampleTrackIndex
+            if (track >= 0) {
+              val time = extractor.sampleTime
+              while (segmentIndex < boundariesUs.size && time >= boundariesUs[segmentIndex]) {
+                finishSegment()
+                segmentIndex += 1
+                startSegment()
+              }
+              buffer.clear()
+              val size = extractor.readSampleData(buffer, 0)
+              if (size > 0) {
+                info.set(0, size, time, extractor.sampleFlags)
+                buffer.position(0)
+                buffer.limit(size)
+                muxer!!.writeSampleData(muxerTracks!![track], buffer, info)
+                samplesInSegment += 1
+                bytesDone += size
+                val now = System.currentTimeMillis()
+                if (now - lastEmit >= EVENT_PROGRESS_INTERVAL_MS) {
+                  lastEmit = now
+                  emit("running", bytesDone, bytesTotal, (partNumber + 1).toLong(), plannedParts.toLong(), null)
+                }
+              }
+            }
+          } while (extractor.advance())
+          finishSegment()
+        } catch (t: Throwable) {
+          runCatching { muxer?.stop() }
+          runCatching { muxer?.release() }
+          muxer = null
+          createdDocs.forEach { runCatching { resolver.delete(it, null, null) } }
+          throw t
+        } finally {
+          runCatching { extractor.release() }
+          tempDir.deleteRecursively()
+        }
+
+        val partCount = partNumber
+        if (partCount < 1) throw IOException("No segments were written")
+
+        val finalChildren = listChildren(resolver, outputDirUri)
+        var totalSize = 0L
+        val parts = (1L..partCount).map { i ->
+          val name = "%s.%03d".format(baseName, i)
+          val size = finalChildren[name]?.let { querySize(resolver, it) } ?: 0L
+          totalSize += size
+          mapOf("name" to name, "index" to i, "sizeBytes" to size)
+        }
+        val manifestName = "$baseName$MANIFEST_SUFFIX"
+        children[manifestName]?.let { runCatching { resolver.delete(it, null, null) } }
+        val manifestJson = JSONObject().apply {
+          put("app", "Spliter")
+          put("format", 1)
+          put("originalName", baseName)
+          put("originalSize", totalSize)
+          put("partCount", partCount)
+          put("partSizeBytes", 0)
+          put("segmentDurationMs", durationMs)
+          put("createdAt", System.currentTimeMillis())
+          put("partPattern", "%03d")
+        }
+        val manifestDoc = insertDocument(resolver, dirDoc, manifestName, MIME_JSON)
+          ?: throw IOException("Could not create the manifest file")
+        resolver.openOutputStream(manifestDoc, "w")!!.use { os ->
+          os.write(manifestJson.toString().toByteArray(Charsets.UTF_8))
+          os.flush()
+        }
+
+        emit("done", bytesTotal, bytesTotal, partCount.toLong(), partCount.toLong(), null)
+        mapOf(
+          "parts" to parts,
+          "totalSize" to totalSize,
+          "partSizeBytes" to 0L,
+          "sha256" to null,
+          "manifestName" to manifestName
+        )
+      }
+    }
+
+    AsyncFunction("mediaDuration") { uriString: String, promise: Promise ->
+      scope.launch {
+        val retriever = MediaMetadataRetriever()
+        try {
+          retriever.setDataSource(context, Uri.parse(uriString))
+          val raw = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+          promise.resolve(raw?.toDoubleOrNull()?.toLong() ?: 0L)
+        } catch (t: Throwable) {
+          promise.resolve(0L)
+        } finally {
+          runCatching { retriever.release() }
+        }
       }
     }
 
@@ -447,6 +713,15 @@ class SplIOModule : Module() {
 }
 
 // ---- part writing ---------------------------------------------------------
+
+/** Muxer output format + temp-file extension for a part base name, or null when unsupported. */
+private fun muxerOutputFormatFor(baseName: String): Pair<Int, String>? =
+  when (baseName.substringAfterLast('.', "").lowercase()) {
+    "mp4", "m4v", "mov" -> MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4 to "mp4"
+    "webm" -> MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM to "webm"
+    "3gp", "3gpp" -> MediaMuxer.OutputFormat.MUXER_OUTPUT_3GPP to "3gp"
+    else -> null
+  }
 
 /** Creates a document inside a SAF tree with the given display name. */
 private fun insertDocument(resolver: android.content.ContentResolver, dirDocUri: Uri, displayName: String, mime: String): Uri? {

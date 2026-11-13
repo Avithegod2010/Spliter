@@ -24,3 +24,24 @@ export function findPreset(id: string | null | undefined): SizePreset | undefine
   if (!id) return undefined;
   return SIZE_PRESETS.find((p) => p.id === id);
 }
+
+export interface DurationPreset {
+  id: string;
+  label: string;
+  sublabel: string;
+  minutes: number;
+}
+
+/** Segment lengths for duration-based media splits. */
+export const DURATION_PRESETS: DurationPreset[] = [
+  { id: 'd-1', label: '1 min', sublabel: 'segment', minutes: 1 },
+  { id: 'd-5', label: '5 min', sublabel: 'segment', minutes: 5 },
+  { id: 'd-10', label: '10 min', sublabel: 'segment', minutes: 10 },
+  { id: 'd-15', label: '15 min', sublabel: 'segment', minutes: 15 },
+  { id: 'd-30', label: '30 min', sublabel: 'segment', minutes: 30 },
+];
+
+export function findDurationPreset(id: string | null | undefined): DurationPreset | undefined {
+  if (!id) return undefined;
+  return DURATION_PRESETS.find((p) => p.id === id);
+}

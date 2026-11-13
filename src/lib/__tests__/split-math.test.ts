@@ -2,8 +2,11 @@ import {
   computeParts,
   computePartsForCount,
   computeResumePoint,
+  MIN_SEGMENT_MS,
   partSizeForCount,
   previewPartCount,
+  previewPartCountByDuration,
+  validateDurationMs,
   validatePartSequence,
   MIN_PART_SIZE,
 } from '../split-math';
@@ -132,5 +135,33 @@ describe('computeResumePoint', () => {
     expect(() => computeResumePoint(-1, MB)).toThrow();
     expect(() => computeResumePoint(1.5, MB)).toThrow();
     expect(() => computeResumePoint(MB, 512)).toThrow(/1 KB/i);
+  });
+});
+
+describe('duration splitting', () => {
+  const MIN = 60_000;
+
+  it('ceil-divides the media timeline into segments', () => {
+    expect(previewPartCountByDuration(30 * MIN, 5 * MIN)).toBe(6);
+    expect(previewPartCountByDuration(31 * MIN, 5 * MIN)).toBe(7);
+    expect(previewPartCountByDuration(4 * MIN, 5 * MIN)).toBe(1);
+    expect(previewPartCountByDuration(5 * MIN, 5 * MIN)).toBe(1);
+    expect(previewPartCountByDuration(5 * MIN + 1, 5 * MIN)).toBe(2);
+  });
+
+  it('validates segment lengths', () => {
+    expect(() => validateDurationMs(0)).toThrow(/1 second/i);
+    expect(() => validateDurationMs(MIN_SEGMENT_MS - 1)).toThrow();
+    expect(() => validateDurationMs(1500.5)).toThrow();
+    expect(() => validateDurationMs(NaN)).toThrow();
+    expect(() => validateDurationMs(MIN)).not.toThrow();
+  });
+
+  it('rejects unreadable timelines and too many segments', () => {
+    expect(() => previewPartCountByDuration(0, MIN)).toThrow(/duration/i);
+    expect(() => previewPartCountByDuration(-5, MIN)).toThrow();
+    expect(() => previewPartCountByDuration(600_000, 999)).toThrow();
+    expect(() => previewPartCountByDuration(10_000_000, 1000)).toThrow(/9999/);
+    expect(previewPartCountByDuration(9_999_000, 1000)).toBe(9999);
   });
 });

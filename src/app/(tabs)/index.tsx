@@ -14,10 +14,24 @@ import { CopyCommandCard } from '@/components/CopyCommandCard';
 import { useTheme } from '@/theme/ThemeProvider';
 import { spacing } from '@/theme/tokens';
 import { useJobEngine } from '@/lib/job-engine';
-import { splIo, type SplResumeOptions, type SplSplitOptions, type SplSplitResult } from '@/lib/native-io';
+import {
+  splIo,
+  type SplMediaSplitOptions,
+  type SplResumeOptions,
+  type SplSplitOptions,
+  type SplSplitResult,
+} from '@/lib/native-io';
 import { parseSizeInput, formatBytes, formatDuration } from '@/lib/format';
-import { findPreset } from '@/lib/presets';
-import { computeResumePoint, partSizeForCount, previewPartCount, MAX_PARTS } from '@/lib/split-math';
+import { DURATION_PRESETS, findDurationPreset, findPreset } from '@/lib/presets';
+import {
+  computeResumePoint,
+  MINUTES_MS,
+  partSizeForCount,
+  previewPartCount,
+  previewPartCountByDuration,
+  validateDurationMs,
+  MAX_PARTS,
+} from '@/lib/split-math';
 import { useHistory } from '@/state/history';
 import { useSettings } from '@/state/settings';
 
@@ -27,7 +41,10 @@ interface PickedFile {
   sizeBytes: number;
 }
 
-type SplitEngineArgs = Omit<SplSplitOptions, 'jobId'> | Omit<SplResumeOptions, 'jobId'>;
+type SplitEngineArgs =
+  | Omit<SplSplitOptions, 'jobId'>
+  | Omit<SplResumeOptions, 'jobId'>
+  | Omit<SplMediaSplitOptions, 'jobId'>;
 
 /** A split that ended in cancel/error — its parts stay on disk, ready to resume. */
 interface FailedSplit {
@@ -40,21 +57,50 @@ interface FailedSplit {
   bytesTotal: number;
 }
 
-type SplitPlan = { ok: true; partSizeBytes: number; partsCount: number } | { ok: false; error: string };
+type SplitPlan =
+  | { ok: true; kind: 'bytes'; partSizeBytes: number; partsCount: number }
+  | { ok: true; kind: 'duration'; durationMs: number; partsCount: number }
+  | { ok: false; error: string };
 
-function resolvePlan(fileSize: number, mode: SizeMode, value: string, unit: SizeUnit): SplitPlan {
+function resolvePlan(
+  fileSize: number,
+  mode: SizeMode,
+  value: string,
+  unit: SizeUnit,
+  mediaDurationMs?: number | null
+): SplitPlan {
   try {
+    if (mode === 'duration') {
+      if (mediaDurationMs == null) return { ok: false, error: 'Reading the media length…' };
+      if (mediaDurationMs <= 0) {
+        return { ok: false, error: 'Could not read the media length — pick an MP4, MOV, WebM or 3GP video.' };
+      }
+      const cleaned = value.trim().replace(',', '.');
+      if (!/^\d+(\.\d+)?$/.test(cleaned)) return { ok: false, error: 'Enter the segment length in minutes' };
+      const minutes = Number.parseFloat(cleaned);
+      if (!Number.isFinite(minutes) || minutes <= 0) {
+        return { ok: false, error: 'Enter the segment length in minutes' };
+      }
+      const durationMs = Math.round(minutes * MINUTES_MS);
+      validateDurationMs(durationMs);
+      return {
+        ok: true,
+        kind: 'duration',
+        durationMs,
+        partsCount: previewPartCountByDuration(mediaDurationMs, durationMs),
+      };
+    }
     if (mode === 'size') {
       const bytes = parseSizeInput(value, unit);
       if (!bytes) return { ok: false, error: 'Enter a part size first' };
-      return { ok: true, partSizeBytes: bytes, partsCount: previewPartCount(fileSize, bytes) };
+      return { ok: true, kind: 'bytes', partSizeBytes: bytes, partsCount: previewPartCount(fileSize, bytes) };
     }
     const cleaned = value.trim().replace(',', '.');
     if (!/^\d+$/.test(cleaned)) return { ok: false, error: 'Enter the number of parts' };
     const count = Number.parseInt(cleaned, 10);
     if (count < 1) return { ok: false, error: 'Need at least 1 part' };
     if (count > MAX_PARTS) return { ok: false, error: `At most ${MAX_PARTS} parts` };
-    return { ok: true, partSizeBytes: partSizeForCount(fileSize, count), partsCount: count };
+    return { ok: true, kind: 'bytes', partSizeBytes: partSizeForCount(fileSize, count), partsCount: count };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : 'Invalid split settings' };
   }
@@ -83,10 +129,34 @@ export default function SplitScreen() {
   const [uiError, setUiError] = useState<string | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [failedSplit, setFailedSplit] = useState<FailedSplit | null>(null);
+  const [mediaDuration, setMediaDuration] = useState<{ uri: string; ms: number } | null>(null);
 
-  const engine = useJobEngine<SplitEngineArgs, SplSplitResult>((args, jobId) =>
-    'resumeFromPartIndex' in args ? splIo.resume({ ...args, jobId }) : splIo.split({ ...args, jobId })
-  );
+  const engine = useJobEngine<SplitEngineArgs, SplSplitResult>((args, jobId) => {
+    if ('resumeFromPartIndex' in args) return splIo.resume({ ...args, jobId });
+    if ('durationMs' in args) return splIo.splitMedia({ ...args, jobId });
+    return splIo.split({ ...args, jobId });
+  });
+
+  // Duration mode needs the media timeline up front for the segment preview.
+  useEffect(() => {
+    if (!file || mode !== 'duration') return;
+    let active = true;
+    const uri = file.uri;
+    splIo
+      .mediaDuration(uri)
+      .then((ms) => {
+        if (active) setMediaDuration({ uri, ms: ms > 0 ? ms : -1 });
+      })
+      .catch(() => {
+        if (active) setMediaDuration({ uri, ms: -1 });
+      });
+    return () => {
+      active = false;
+    };
+  }, [file, mode]);
+
+  // Null while loading a new file's timeline; -1 when it is not readable as media.
+  const mediaDurationMs = file && mediaDuration?.uri === file.uri ? mediaDuration.ms : null;
 
   // Handle files sent from other apps (ACTION_VIEW / ACTION_SEND with a content:// URI).
   const acceptIncomingUri = useCallback(async (url: string | null | undefined) => {
@@ -111,8 +181,8 @@ export default function SplitScreen() {
   }, [acceptIncomingUri]);
 
   const plan = useMemo<SplitPlan | null>(
-    () => (file ? resolvePlan(file.sizeBytes, mode, value, unit) : null),
-    [file, mode, value, unit]
+    () => (file ? resolvePlan(file.sizeBytes, mode, value, unit, mediaDurationMs) : null),
+    [file, mode, value, unit, mediaDurationMs]
   );
   const planError = plan && !plan.ok ? plan.error : null;
   const partsCount = plan?.ok ? plan.partsCount : null;
@@ -179,29 +249,43 @@ export default function SplitScreen() {
       for (let i = 0; i < files.length; i++) {
         const f = files[i];
         setBatch({ files, index: i });
-        const batchPlan = resolvePlan(f.sizeBytes, mode, value, unit);
+        const fileDurationMs = mode === 'duration' ? await splIo.mediaDuration(f.uri).catch(() => -1) : null;
+        const batchPlan = resolvePlan(f.sizeBytes, mode, value, unit, fileDurationMs);
         if (!batchPlan.ok) {
           setUiError(`${f.name}: ${batchPlan.error}`);
           setBatch(null);
           return;
         }
-        const res = await engine.start({
-          sourceUri: f.uri,
-          outputDirUri: dirUri,
-          baseName: f.name,
-          partSizeBytes: batchPlan.partSizeBytes,
-          computeSha256: integrity,
-        });
+        const res = await engine.start(
+          batchPlan.kind === 'duration'
+            ? {
+                sourceUri: f.uri,
+                outputDirUri: dirUri,
+                baseName: f.name,
+                durationMs: batchPlan.durationMs,
+              }
+            : {
+                sourceUri: f.uri,
+                outputDirUri: dirUri,
+                baseName: f.name,
+                partSizeBytes: batchPlan.partSizeBytes,
+                computeSha256: integrity,
+              }
+        );
         if (!res) {
-          setFailedSplit({
-            sourceUri: f.uri,
-            outputDirUri: dirUri,
-            baseName: f.name,
-            partSizeBytes: batchPlan.partSizeBytes,
-            computeSha256: integrity,
-            bytesDone: engine.progressRef.current.bytesDone,
-            bytesTotal: engine.progressRef.current.bytesTotal || f.sizeBytes,
-          });
+          if (batchPlan.kind === 'bytes') {
+            setFailedSplit({
+              sourceUri: f.uri,
+              outputDirUri: dirUri,
+              baseName: f.name,
+              partSizeBytes: batchPlan.partSizeBytes,
+              computeSha256: integrity,
+              bytesDone: engine.progressRef.current.bytesDone,
+              bytesTotal: engine.progressRef.current.bytesTotal || f.sizeBytes,
+            });
+          } else {
+            setFailedSplit(null);
+          }
           setBatch(null);
           return;
         }
@@ -212,12 +296,12 @@ export default function SplitScreen() {
           name: f.name,
           sizeBytes: res.totalSize,
           partsCount: res.parts.length,
-          partSizeBytes: batchPlan.partSizeBytes,
+          partSizeBytes: batchPlan.kind === 'bytes' ? batchPlan.partSizeBytes : null,
           sha256: res.sha256,
           verified: !!res.sha256,
           outputDirUri: dirUri,
           sourceUri: f.uri,
-          integrity,
+          integrity: batchPlan.kind === 'bytes' ? integrity : false,
           partUris: null,
           manifestName: res.manifestName,
           durationMs: engine.durationMs.current,
@@ -245,6 +329,38 @@ export default function SplitScreen() {
       const dirUri = await pickDirectory();
       if (!dirUri) return;
       setLastOutputDirUri(dirUri);
+      if (plan.kind === 'duration') {
+        const mediaRes = await engine.start({
+          sourceUri: file.uri,
+          outputDirUri: dirUri,
+          baseName: file.name,
+          durationMs: plan.durationMs,
+        });
+        if (mediaRes) {
+          setFailedSplit(null);
+          addJob({
+            id: `h-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+            type: 'split',
+            name: file.name,
+            sizeBytes: mediaRes.totalSize,
+            partsCount: mediaRes.parts.length,
+            partSizeBytes: null,
+            sha256: mediaRes.sha256,
+            verified: false,
+            outputDirUri: dirUri,
+            sourceUri: file.uri,
+            integrity: false,
+            partUris: null,
+            manifestName: mediaRes.manifestName,
+            durationMs: engine.durationMs.current,
+            createdAt: Date.now(),
+          });
+        } else {
+          // Media segments cannot be resumed — no resume checkpoint.
+          setFailedSplit(null);
+        }
+        return;
+      }
       const partSizeBytes = plan.partSizeBytes;
       const res = await engine.start({
         sourceUri: file.uri,
@@ -362,7 +478,13 @@ export default function SplitScreen() {
     setFailedSplit(null);
   };
 
-  const banner = uiError ?? (engine.phase === 'cancelled' ? 'Split cancelled — completed parts were kept. You can resume.' : engine.error);
+  const banner =
+    uiError ??
+    (engine.phase === 'cancelled'
+      ? failedSplit
+        ? 'Split cancelled — completed parts were kept. You can resume.'
+        : 'Split cancelled — partial segments were removed.'
+      : engine.error);
 
   const resumePoint = failedSplit ? computeResumePoint(failedSplit.bytesDone, failedSplit.partSizeBytes) : null;
   const showResume = !!failedSplit && (engine.phase === 'cancelled' || engine.phase === 'error');
@@ -486,43 +608,68 @@ export default function SplitScreen() {
                 setPresetId(null);
               }}
             />
-            <PresetChips
-              selectedId={presetId}
-              onSelect={(id) => {
-                const preset = findPreset(id);
-                if (!preset) return;
-                setMode('size');
-                setUnit('MB');
-                setValue(String(Math.round(preset.bytes / (1024 * 1024))));
-                setPresetId(id);
-              }}
-            />
+            {mode === 'duration' ? (
+              <PresetChips
+                presets={DURATION_PRESETS}
+                selectedId={presetId}
+                onSelect={(id) => {
+                  const preset = findDurationPreset(id);
+                  if (!preset) return;
+                  setValue(String(preset.minutes));
+                  setPresetId(id);
+                }}
+              />
+            ) : (
+              <PresetChips
+                selectedId={presetId}
+                onSelect={(id) => {
+                  const preset = findPreset(id);
+                  if (!preset) return;
+                  setMode('size');
+                  setUnit('MB');
+                  setValue(String(Math.round(preset.bytes / (1024 * 1024))));
+                  setPresetId(id);
+                }}
+              />
+            )}
             {plan?.ok && (
               <Text style={[styles.preview, { color: accent.accentSoft }]}>
-                {plan.partsCount === 1
-                  ? 'Whole file fits in one part'
-                  : `${plan.partsCount} parts · about ${formatBytes(plan.partSizeBytes)} each`}
+                {plan.kind === 'duration'
+                  ? plan.partsCount === 1
+                    ? 'Whole video fits in one segment'
+                    : `${plan.partsCount} segments of ~${plan.durationMs / MINUTES_MS} min`
+                  : plan.partsCount === 1
+                    ? 'Whole file fits in one part'
+                    : `${plan.partsCount} parts · about ${formatBytes(plan.partSizeBytes)} each`}
               </Text>
             )}
             {planError && <Text style={[styles.error, { color: colors.danger }]}>{planError}</Text>}
-            <View style={[styles.toggleRow, { borderColor: colors.surfaceBorder }]}>
-              <View style={styles.toggleText}>
-                <Text style={[styles.toggleTitle, { color: colors.text }]}>SHA-256 fingerprint</Text>
-                <Text style={[styles.toggleSub, { color: colors.textDim }]}>
-                  Verify integrity when rejoining — adds a moment at the end
-                </Text>
+            {mode !== 'duration' && (
+              <View style={[styles.toggleRow, { borderColor: colors.surfaceBorder }]}>
+                <View style={styles.toggleText}>
+                  <Text style={[styles.toggleTitle, { color: colors.text }]}>SHA-256 fingerprint</Text>
+                  <Text style={[styles.toggleSub, { color: colors.textDim }]}>
+                    Verify integrity when rejoining — adds a moment at the end
+                  </Text>
+                </View>
+                <Switch
+                  value={integrity}
+                  onValueChange={setIntegrity}
+                  trackColor={{ false: colors.surfaceBorder, true: accent.accent }}
+                  thumbColor="#FFFFFF"
+                />
               </View>
-              <Switch
-                value={integrity}
-                onValueChange={setIntegrity}
-                trackColor={{ false: colors.surfaceBorder, true: accent.accent }}
-                thumbColor="#FFFFFF"
-              />
-            </View>
+            )}
           </View>
         </GlassCard>
         <AppButton
-          label={partsCount ? `Split into ${partsCount} part${partsCount > 1 ? 's' : ''}` : 'Split file'}
+          label={
+            partsCount
+              ? mode === 'duration'
+                ? `Split into ${partsCount} segment${partsCount > 1 ? 's' : ''}`
+                : `Split into ${partsCount} part${partsCount > 1 ? 's' : ''}`
+              : 'Split file'
+          }
           icon="cut"
           onPress={startSplit}
           disabled={!ready}

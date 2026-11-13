@@ -36,6 +36,15 @@ export interface SplResumeOptions {
   jobId: string;
 }
 
+export interface SplMediaSplitOptions {
+  sourceUri: string;
+  outputDirUri: string;
+  baseName: string;
+  /** Target length of each segment; cuts are keyframe-aligned when possible. */
+  durationMs: number;
+  jobId: string;
+}
+
 export interface SplMergeOptions {
   partUris: string[];
   outputDirUri: string;
@@ -88,10 +97,12 @@ type SplIOEvents = { onJobEvent: (event: SplJobEvent) => void };
 declare class SplIOModule extends NativeModule<SplIOEvents> {
   splitAsync(options: SplSplitOptions): Promise<SplSplitResult>;
   resumeAsync(options: SplResumeOptions): Promise<SplSplitResult>;
+  splitMediaAsync(options: SplMediaSplitOptions): Promise<SplSplitResult>;
   mergeAsync(options: SplMergeOptions): Promise<SplMergeResult>;
   cancelJob(jobId: string): Promise<boolean>;
   lastJobEvent(jobId: string): Promise<SplJobEvent | null>;
   fileInfo(uri: string): Promise<SplFileInfo>;
+  mediaDuration(uri: string): Promise<number>;
   freeDiskSpace(): Promise<number>;
   listSplitParts(dirUri: string): Promise<{ groups: SplPartGroup[] }>;
 }
@@ -120,6 +131,12 @@ export const splIo = {
   },
   resume(options: SplResumeOptions) {
     return requireModule().resumeAsync(options);
+  },
+  splitMedia(options: SplMediaSplitOptions) {
+    return requireModule().splitMediaAsync(options);
+  },
+  mediaDuration(uri: string) {
+    return requireModule().mediaDuration(uri);
   },
   merge(options: SplMergeOptions) {
     return requireModule().mergeAsync(options);
