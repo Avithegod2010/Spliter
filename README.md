@@ -1,8 +1,12 @@
-<div align="center">
+# Spliter
 
-<img src=".github/assets/banner.svg" alt="Spliter — split any file into byte-perfect parts" width="100%"/>
+Split a large file into parts that fit your upload or storage limit. Rejoin the parts on Android or with one command on Windows, macOS or Linux.
 
-**Split any file into byte-perfect parts. Rejoin them anywhere — on your phone, or on any PC with one shell command.**
+**[Download APK v1.2.0](https://github.com/Avithegod2010/Spliter/releases/download/v1.2.0/Spliter-v1.2.0.apk)** · [Visit website](https://avithegod2010.github.io/Spliter/) · [PC Rejoin Kit](#the-pc-rejoin-kit--the-part-people-actually-need)
+
+| Split on Android | Verified PC rejoin example |
+| :---: | :---: |
+| <img src=".github/screenshots/split.png" alt="Spliter’s file selection and part size controls" width="235" /> | <img src="rejoin-verified.png" width="410" alt="Three parts rebuilt into sample-video.rebuilt.bin, with seven mebibytes restored and a matching SHA-256" /> |
 
 [![Platform](https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white)](https://developer.android.com)
 [![CI](https://github.com/Avithegod2010/Spliter/actions/workflows/ci.yml/badge.svg)](https://github.com/Avithegod2010/Spliter/actions/workflows/ci.yml)
@@ -12,11 +16,7 @@
 [![TypeScript](https://img.shields.io/badge/types-strict-3178C6?logo=typescript&logoColor=white)](#verify-it-yourself)
 [![License](https://img.shields.io/badge/license-MIT-62627A)](LICENSE)
 
-**🌐 [Open the animated website](https://avithegod2010.github.io/Spliter/)**
-
-</div>
-
----
+The example rebuilds three parts and compares the resulting SHA-256 with the original. In the Android app, import the manifest to enable fingerprint verification.
 
 ## Why
 
@@ -104,10 +104,9 @@ Expo's JS file APIs can't stream byte ranges through Android's Storage Access Fr
 <div align="center">
 <table>
   <tr>
-    <td align="center" width="25%"><img src=".github/screenshots/split.png" alt="Split screen" width="220"/><br/><sub><b>Split</b> — pick any file</sub></td>
-    <td align="center" width="25%"><img src=".github/screenshots/rejoin.png" alt="Rejoin screen" width="220"/><br/><sub><b>Rejoin</b> — parts rebuilt</sub></td>
-    <td align="center" width="25%"><img src=".github/screenshots/history.png" alt="History screen" width="220"/><br/><sub><b>History</b> — every job</sub></td>
-    <td align="center" width="25%"><img src=".github/screenshots/settings.png" alt="Settings screen" width="220"/><br/><sub><b>Theme Studio</b> — make it yours</sub></td>
+    <td align="center" width="33%"><img src=".github/screenshots/split.png" alt="Split screen" width="220"/><br/><sub><b>Split</b> — pick any file</sub></td>
+    <td align="center" width="33%"><img src=".github/screenshots/history.png" alt="History screen" width="220"/><br/><sub><b>History</b> — every job</sub></td>
+    <td align="center" width="33%"><img src=".github/screenshots/settings.png" alt="Settings screen" width="220"/><br/><sub><b>Theme Studio</b> — make it yours</sub></td>
   </tr>
 </table>
 </div>
