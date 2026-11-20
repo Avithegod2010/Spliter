@@ -1,22 +1,25 @@
-# Spliter
+<div align="center">
 
-Split a large file into parts that fit your upload or storage limit. Rejoin the parts on Android or with one command on Windows, macOS or Linux.
+<h1>Spliter</h1>
 
-**[Download APK v1.2.0](https://github.com/Avithegod2010/Spliter/releases/download/v1.2.0/Spliter-v1.2.0.apk)** · [Visit website](https://avithegod2010.github.io/Spliter/) · [PC Rejoin Kit](#the-pc-rejoin-kit--the-part-people-actually-need)
+<p><strong>Split a large file to fit a size limit. Rejoin it on Android or with one command on a computer.</strong></p>
 
-| Split on Android | Verified PC rejoin example |
+<p><strong><a href="https://github.com/Avithegod2010/Spliter/releases/download/v1.2.0/Spliter-v1.2.0.apk">⬇️ Download APK v1.2.0</a></strong> · <a href="https://avithegod2010.github.io/Spliter/">🌐 Visit the website</a> · <a href="#the-pc-rejoin-kit--the-part-people-actually-need">🧩 PC Rejoin Kit</a></p>
+
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="readme-hero.png" />
+  <img src="readme-hero.gif" width="820" alt="An illustrated file split into three pieces and a check mark for verification" />
+</picture>
+
+</div>
+
+## ✂️ Split and verify
+
+| Split on Android | Verify a completed rejoin |
 | :---: | :---: |
-| <img src=".github/screenshots/split.png" alt="Spliter’s file selection and part size controls" width="235" /> | <img src="rejoin-verified.png" width="410" alt="Three parts rebuilt into sample-video.rebuilt.bin, with seven mebibytes restored and a matching SHA-256" /> |
+| <a href=".github/screenshots/split.png"><img src=".github/screenshots/split.png" width="240" alt="Spliter’s file picker and part size controls" /></a> | <a href="rejoin-verified.png"><img src="rejoin-verified.png" width="425" alt="A seven-mebibyte file rebuilt from three parts and verified with SHA-256" /></a> |
 
-[![Platform](https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white)](https://developer.android.com)
-[![CI](https://github.com/Avithegod2010/Spliter/actions/workflows/ci.yml/badge.svg)](https://github.com/Avithegod2010/Spliter/actions/workflows/ci.yml)
-[![Expo SDK](https://img.shields.io/badge/Expo%20SDK-58-8B5CF6?logo=expo&logoColor=white)](https://expo.dev)
-[![Website](https://img.shields.io/badge/website-live-a3e635)](https://avithegod2010.github.io/Spliter/)
-[![Tests](https://img.shields.io/badge/tests-33%2F33-34D399)](#verify-it-yourself)
-[![TypeScript](https://img.shields.io/badge/types-strict-3178C6?logo=typescript&logoColor=white)](#verify-it-yourself)
-[![License](https://img.shields.io/badge/license-MIT-62627A)](LICENSE)
-
-The example rebuilds three parts and compares the resulting SHA-256 with the original. In the Android app, import the manifest to enable fingerprint verification.
+The PC example reassembles three parts and checks the result against the original SHA-256. In the Android app, import the manifest to enable fingerprint verification.
 
 ## Why
 
@@ -24,7 +27,9 @@ Every file-sharing app has a ceiling — and it's always the wrong one. A 6 GB v
 
 **Spliter doesn't care what the file is.** It's a byte-level splitter: it cuts *any* file — video, archive, APK, disk image, whatever — into parts sized for where it needs to go, and rejoins them with zero loss. The parts rejoin **inside the app** or on **any Windows / macOS / Linux machine** with a single built-in shell command. No receiver-side software needed.
 
-## Highlights
+<a name="highlights"></a>
+
+## ✨ Highlights
 
 | | |
 |---|---|
@@ -99,7 +104,9 @@ flowchart LR
 Expo's JS file APIs can't stream byte ranges through Android's Storage Access Framework on SDK 58 — and Spliter refuses shortcuts that load whole files into memory. The `spl-io` module streams in fixed 8 MB buffers, computes SHA-256 *while* copying, checks a cancel flag between every chunk, and cleans up partial parts on failure. That's what makes 10 GB sources, live progress rings, and background-proof splits possible — and why the app needs a development-client build rather than Expo Go.
 </details>
 
-## Screenshots
+<a name="screenshots"></a>
+
+## 📸 Screenshots
 
 <div align="center">
 <table>
@@ -111,7 +118,9 @@ Expo's JS file APIs can't stream byte ranges through Android's Storage Access Fr
 </table>
 </div>
 
-## Verify it yourself
+<a name="verify-it-yourself"></a>
+
+## ✅ Verify it yourself
 
 Quality gates are part of the repo, not an afterthought:
 
@@ -122,7 +131,9 @@ Quality gates are part of the repo, not an afterthought:
 | ESLint (expo config, React Compiler rules) | ✅ 0 problems |
 | Native module compile (`:spl-io:assembleDebug`) | ✅ BUILD SUCCESSFUL |
 
-## Build it
+<a name="build-it"></a>
+
+## 🛠️ Build it
 
 ```bash
 git clone https://github.com/Avithegod2010/Spliter.git
@@ -141,6 +152,8 @@ eas build -p android --profile production    # standalone APK
 > **Note:** the Kotlin engine lives in `modules/spl-io/` and links automatically. Expo Go cannot run it — use a dev-client or production build.
 
 ## Status
+
+[![CI](https://github.com/Avithegod2010/Spliter/actions/workflows/ci.yml/badge.svg)](https://github.com/Avithegod2010/Spliter/actions/workflows/ci.yml)
 
 - ✅ v1.0.1 — manual multi-select rejoin, EAS Update wired, CI on every push
 - ✅ Production APK + Play Store AAB built per release tag by GitHub Actions
