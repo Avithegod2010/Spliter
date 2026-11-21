@@ -1,5 +1,5 @@
 import { buildRejoinKit, unixCommand, windowsCommand } from '../pc-commands';
-import { toSafeBaseName } from '../safe-name';
+import { toSafeBaseName, isCmdSafeName } from '../safe-name';
 
 describe('pc rejoin commands', () => {
   const parts = ['movie.mp4.001', 'movie.mp4.002', 'movie.mp4.003'];
@@ -34,23 +34,22 @@ describe('pc rejoin commands', () => {
 
   describe('injection payloads', () => {
     // The original bug: `photo"&calc&".jpg` closed the quote and ran `calc`.
-    const payloads = [
-      'photo"&calc&".jpg',
-      'a&calc&b.001',
-      'x%USERPROFILE%y.001',
-      'x"y.001',
-      'x!PATH!y.001',
-      'x^&y.001',
-      'x|y.001',
-      'x<y.001',
-    ];
+    // Only `"`, `%` and `!` can escape a cmd.exe quoted token — `& | < > ^` are
+    // literal inside quotes, so those names must still produce a usable command.
+    const breakOut = ['photo"&calc&".jpg', 'x"y.001', 'x%USERPROFILE%y.001', 'x!PATH!y.001'];
+    const quotedMeta = ['a&calc&b.001', 'x^&y.001', 'x|y.001', 'x<y.001'];
 
-    it.each(payloads)('never emits a Windows command for %s', (name) => {
+    it.each(breakOut)('never emits a Windows command for %s', (name) => {
       expect(windowsCommand([name], 'out.bin')).toBe('');
       const kit = buildRejoinKit([name], 'out.bin');
       expect(kit.windows).toBe('');
       expect(kit.unsafeNames).toContain(name);
       expect(kit.note).toMatch(/rename/i);
+    });
+
+    it.each(quotedMeta)('quotes %s literally', (name) => {
+      expect(windowsCommand([name], 'out.bin')).toBe(`copy /b "${name}" "out.bin"`);
+      expect(isCmdSafeName(name)).toBe(true);
     });
 
     it('refuses when only the output name is unsafe', () => {
