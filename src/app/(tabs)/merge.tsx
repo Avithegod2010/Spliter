@@ -153,7 +153,10 @@ export default function MergeScreen() {
           },
         },
       });
-      Alert.alert('Manifest imported', 'Fingerprint verification is now available for these parts.');
+      Alert.alert(
+        'Manifest imported',
+        'Fingerprint verification is now available for these parts. Manifests are not signed — only import one you produced yourself.',
+      );
     } catch {
       Alert.alert('Import failed', 'Could not read that file as JSON.');
     }
@@ -340,7 +343,7 @@ export default function MergeScreen() {
             <VerifiedBadge verified={res.verified} showUnverified />
             <Text style={[styles.verifyNote, { color: colors.textDim }]}>
               {res.verified
-                ? 'SHA-256 fingerprint matches the original — byte-for-byte identical.'
+                ? 'SHA-256 matches the imported manifest. A manifest is not signed — only trust file + manifest pairs you produced yourself.'
                 : 'Size matches the manifest. Pick a folder scan with a manifest to verify by fingerprint.'}
             </Text>
           </View>
