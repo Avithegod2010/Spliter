@@ -6,20 +6,25 @@
 
 <p><strong><a href="https://github.com/Avithegod2010/Spliter/releases/download/v1.2.0/Spliter-v1.2.0.apk">⬇️ Download APK v1.2.0</a></strong> · <a href="https://avithegod2010.github.io/Spliter/">🌐 Visit the website</a> · <a href="#the-pc-rejoin-kit--the-part-people-actually-need">🧩 PC Rejoin Kit</a></p>
 
+</div>
+
+## ✂️ Split and verify
+
+| **Split on Android** | **Rejoin and verify on desktop** |
+| :---: | :---: |
+| <a href=".github/screenshots/split.png"><img src=".github/screenshots/split.png" width="205" alt="Spliter’s file picker and part size controls" /></a> | <a href="rejoin-verified.png"><img src="rejoin-verified.png" width="475" alt="A seven-mebibyte file rebuilt from three parts and verified with SHA-256" /></a> |
+
+The PC example reassembles three parts and checks the result against the original SHA-256. In the Android app, import the manifest to enable fingerprint verification.
+
+<details>
+<summary>Project illustration</summary>
+
 <picture>
   <source media="(prefers-reduced-motion: reduce)" srcset="readme-hero.png" />
   <img src="readme-hero.gif" width="820" alt="An illustrated file split into three pieces and a check mark for verification" />
 </picture>
 
-</div>
-
-## ✂️ Split and verify
-
-| Split on Android | Verify a completed rejoin |
-| :---: | :---: |
-| <a href=".github/screenshots/split.png"><img src=".github/screenshots/split.png" width="240" alt="Spliter’s file picker and part size controls" /></a> | <a href="rejoin-verified.png"><img src="rejoin-verified.png" width="425" alt="A seven-mebibyte file rebuilt from three parts and verified with SHA-256" /></a> |
-
-The PC example reassembles three parts and checks the result against the original SHA-256. In the Android app, import the manifest to enable fingerprint verification.
+</details>
 
 ## Why
 
