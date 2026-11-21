@@ -22,6 +22,7 @@ import {
   type SplSplitResult,
 } from '@/lib/native-io';
 import { parseSizeInput, formatBytes, formatDuration } from '@/lib/format';
+import { toSafeBaseName } from '@/lib/safe-name';
 import { DURATION_PRESETS, findDurationPreset, findPreset } from '@/lib/presets';
 import {
   computeResumePoint,
@@ -168,7 +169,7 @@ export default function SplitScreen() {
       setBatch(null);
       setUiError(null);
       setFailedSplit(null);
-      setFile({ uri: url, name: info.name, sizeBytes: info.sizeBytes });
+      setFile({ uri: url, name: toSafeBaseName(info.name), sizeBytes: info.sizeBytes });
     } catch {
       // Unreadable intent payload — ignore; the user can pick a file manually.
     }
@@ -210,7 +211,7 @@ export default function SplitScreen() {
       if (sizeBytes <= 0) continue;
       checked.push({
         uri: asset.uri,
-        name: asset.name || asset.uri.split('/').pop() || 'file',
+        name: toSafeBaseName(asset.name || asset.uri.split('/').pop() || 'file'),
         sizeBytes,
       });
     }

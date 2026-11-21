@@ -20,8 +20,12 @@ export function CopyCommandCard({ partNames, outputName }: CopyCommandCardProps)
   const [copied, setCopied] = useState(false);
   const kit = useMemo(() => buildRejoinKit(partNames, outputName), [partNames, outputName]);
   const command = platform === 'windows' ? kit.windows : kit.unix;
+  // An empty Windows command means a part name contains characters that cannot
+  // be embedded in cmd.exe safely; the note explains which ones to rename.
+  const unavailable = command.length === 0;
 
   const copy = async () => {
+    if (unavailable) return;
     Clipboard.setStringAsync(command).catch(() => {});
     if (motion !== 'off') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     setCopied(true);
@@ -49,7 +53,9 @@ export function CopyCommandCard({ partNames, outputName }: CopyCommandCardProps)
       </View>
       <Pressable onPress={copy} accessibilityRole="button" accessibilityLabel="Copy command">
         <Text style={[styles.command, { color: accent.accentSoft, backgroundColor: colors.backgroundAlt }]} selectable>
-          {command}
+          {unavailable
+            ? 'Cannot build a Windows command for these names — rename the parts in Explorer first (see note above).'
+            : command}
         </Text>
       </Pressable>
       <View style={styles.copyRow}>
@@ -59,7 +65,11 @@ export function CopyCommandCard({ partNames, outputName }: CopyCommandCardProps)
           color={copied ? colors.success : colors.textDim}
         />
         <Text style={[styles.copyText, { color: copied ? colors.success : colors.textDim }]}>
-          {copied ? 'Copied — paste it into a terminal in the parts folder' : 'Tap the command to copy'}
+          {unavailable
+            ? 'The macOS / Linux command still works for these names.'
+            : copied
+              ? 'Copied — paste it into a terminal in the parts folder'
+              : 'Tap the command to copy'}
         </Text>
       </View>
     </GlassCard>

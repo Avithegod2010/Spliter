@@ -19,6 +19,7 @@ import { formatBytes, formatDuration } from '@/lib/format';
 import { validatePartSequence } from '@/lib/split-math';
 import { stripPartSuffix, buildManifest, manifestName as manifestFileName, isManifest } from '@/lib/manifest';
 import { buildRejoinKit } from '@/lib/pc-commands';
+import { toSafeBaseName } from '@/lib/safe-name';
 import { useHistory } from '@/state/history';
 import { useSettings } from '@/state/settings';
 
@@ -160,10 +161,10 @@ export default function MergeScreen() {
 
   const shareKit = useCallback(() => {
     if (!candidate) return;
-    const outputName = candidate.group.manifest?.originalName || candidate.group.baseName;
+    const outputName = toSafeBaseName(candidate.group.manifest?.originalName || candidate.group.baseName);
     const kit = buildRejoinKit(candidate.group.partNames, outputName);
     Share.share({
-      message: `Rejoin "${outputName}" (${formatBytes(candidate.group.partSizes.reduce((a, b) => a + b, 0))}, ${candidate.group.partNames.length} parts) on any PC:\n\nWindows:\n${kit.windows}\n\nmacOS / Linux:\n${kit.unix}\n\n${kit.note}`,
+      message: `Rejoin "${outputName}" (${formatBytes(candidate.group.partSizes.reduce((a, b) => a + b, 0))}, ${candidate.group.partNames.length} parts) on any PC:\n\nWindows:\n${kit.windows || '(rename the parts first — see note)'}\n\nmacOS / Linux:\n${kit.unix}\n\n${kit.note}`,
     }).catch(() => {});
   }, [candidate]);
 
@@ -265,7 +266,7 @@ export default function MergeScreen() {
         outputDirUri = dir.directoryUri;
       }
       const manifest = cand.group.manifest;
-      const outputName = manifest?.originalName || cand.group.baseName;
+      const outputName = toSafeBaseName(manifest?.originalName || cand.group.baseName);
       const res = await engine.start({
         partUris: cand.group.partUris,
         outputDirUri,
