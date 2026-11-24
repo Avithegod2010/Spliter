@@ -50,7 +50,7 @@ export function VerifiedBadge({ verified, delayed, showUnverified }: VerifiedBad
         color={verified ? success : colors.textDim}
       />
       <Text style={[styles.text, { color: verified ? success : colors.textDim }]}>
-        {verified ? 'Verified' : 'Not verified'}
+        {verified ? 'Matches manifest' : 'Not verified'}
       </Text>
     </Animated.View>
   );
